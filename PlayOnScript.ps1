@@ -19,6 +19,8 @@ $outputFolder = "Z:\PlayOn\"
 
 # optional compress settings
 $compress = $true
+$videoRate = "1M"
+$audioRate = "156k"
 
 # optionally delete files when done
 $deleteSource = $true
@@ -29,9 +31,6 @@ $deleteSource = $true
 $debug = $false
 $deleteTempFiles = $true
 
-# get a list of videos files to trim
-$videoFilesToProcess = Get-ChildItem "$inputFolder*.mp4" -Recurse
-
 function IsFileLocked($filePath) 
 {
     Rename-Item $filePath $filePath -ErrorVariable errs -ErrorAction SilentlyContinue
@@ -40,6 +39,8 @@ function IsFileLocked($filePath)
 
 function ProcessVideos
 {
+    # get a list of videos files to trim
+    $videoFilesToProcess = Get-ChildItem "$inputFolder*.mp4" -Recurse
 
     # for each video file in the list...
     foreach ($videoFile in $videoFilesToProcess) 
@@ -132,7 +133,7 @@ function ProcessVideos
                 }
 
                 # concat all the chapter video files into the output video file
-                if ($compress) { ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -b:v 1M -b:a 156k $outputVideoFilePath }
+                if ($compress) { ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -b:v $videoRate -b:a $audioRate $outputVideoFilePath }
                 else { ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy $outputVideoFilePath }
 
                 # cleanup temporary files
@@ -156,7 +157,7 @@ function ProcessVideos
 
                 # copy the trimmed video to the output video file path and compress
                 if ($debug) { Write-Output "-- $($startSeconds) => $($durationSeconds): creating trimmed video file: $($outputVideoFilePath). Compressing: $($compress). " }
-                if ($compress) { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -b:v 1M -b:a 156k $outputVideoFilePath }
+                if ($compress) { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -b:v $videoRate -b:a $audioRate $outputVideoFilePath }
                 else { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputVideoFilePath }
             }
 
