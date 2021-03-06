@@ -8,14 +8,20 @@
 $startSkipSeconds = 5
 $endSkipSeconds = 6
 
-#number of minutes to retry looking for files set to zero for no retrying
+#number of minutes to retry waiting for files set to zero for no retrying
 $retryTime = 5
+
+#exit process if we are out of files to process (including in progress recordings)
+$autoExit = $true
 
 # where are the videos to convert
 $inputFolder = "D:\Videos\PlayOn\"
 
 # where do you want the trimmed videos to be stored
-$outputFolder = "Z:\PlayOn\"
+# if you only need one location set movieLength to 0 and put the location in outputMovies
+$outputMovies = "Z:\Movies\"
+$outputTelevision = "Z:\PlayOn\"
+$movieLength = 4000
 
 # optional compress settings
 $compress = $true
@@ -25,16 +31,64 @@ $audioRate = "156k"
 # optionally delete files when done
 $deleteSource = $true
 
+# Log file location (console for screen or filepath to disk)
+$logFileLocation = "d:\videos\PlayOn\LogFile.txt"
+#$logFileLocation = "Console"
+
 ###################################################################################################################
 # do not change anything below here unless you know what you are doing
 ###################################################################################################################
 $debug = $false
 $deleteTempFiles = $true
+$runLowerPriority = $true
+
+
+###################################################################################################################
+# Begin Code
+###################################################################################################################
+
+#Run at a lower priority if running compression
+if ($runLowerPriority -eq $true -And $compress -eq $true)
+{
+    $process = Get-Process -Id $pid
+    $process.PriorityClass = 'BelowNormal' 
+}
+
+# Universal message hanadler
+function MessageLog($message, $msgType)
+{
+    #check if the message is only for debugging purposes
+    if ($msgType -eq "debug")
+    {
+        #check if we are set to view debug messages if not exit function
+        if ($debug -ne $true)
+        {
+            return
+        }
+    }
+    
+    $timeStamp = "[{0:MM/dd/yy} {0:HH:mm:ss}]" -f (Get-Date)
+    $logstring = "$($timeStamp) - $($message)"
+
+    if ($logFileLocation -eq "Console" -or $msgType -eq "console") { Write-Output $logstring }
+    else { Add-content $logFileLocation -value $logstring }
+}
 
 function IsFileLocked($filePath) 
-{
+{    
     Rename-Item $filePath $filePath -ErrorVariable errs -ErrorAction SilentlyContinue
     return ($errs.Count -ne 0)
+}
+
+#check if the video is a movie soley by total length of the video
+function isMovie($filePath)
+{
+    #If there is no movie length then everything goes to the one directory
+    if ($movieLength -eq 0) { return $true }
+
+    $videoLength = & ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $filePath
+    if ($videoLength -gt $movieLength) { return $true }
+    else { return $false }
 }
 
 function ProcessVideos
@@ -45,21 +99,34 @@ function ProcessVideos
     # for each video file in the list...
     foreach ($videoFile in $videoFilesToProcess) 
     {
-        $fileLocked = IsFileLocked($videoFile)
+        $fileLocked = IsFileLocked $videoFile
         if ($fileLocked -eq $true)
         {
-            Write-Output "File: $($videoFile) is in process skipping."
+            MessageLog "File: $($videoFile) is in process skipping."
             continue
         }
 
         # compute the file path to store the trimmed video
-        $outputVideoFilePath = $videoFile.FullName.Replace($inputFolder, $outputFolder)
-        $outputVideoFolderPath = $outputVideoFilePath.Replace($videoFile.Name,"")
+        if (isMovie $videoFile -eq $true) 
+        { 
+            $outputFolder = $outputMovies 
+            $outputVideoFilePath = $outputMovies + $videoFile.Name
+            $outputVideoFolderPath = $outputMovies 
+        }
+        else 
+        { 
+            $outputFolder = $outputTelevision 
+            $outputVideoFilePath = $videoFile.FullName.Replace($inputFolder, $outputFolder)
+            $outputVideoFolderPath = $outputVideoFilePath.Replace($videoFile.Name,"")
+        }
 
+        MessageLog "Output Folder: $($outputFolder), Output Video File Path: $($outputVideoFilePath), Output Video Folder Path: $($outputVideoFolderPath)" "debug"
+
+        
         # if it already exists, skip it, else continue...
         if (!(Test-Path -Path $outputVideoFilePath)) 
         {
-            Write-Output "`r`n- Processing: $($videoFile.FullName)"
+            MessageLog "Processing: $($videoFile.FullName)"
         
             # if the output video folder does not exist, create it.
             if (!(Test-Path -Path $outputVideoFolderPath )) { New-Item -ItemType directory -Path $outputVideoFolderPath | Out-Null }
@@ -69,7 +136,7 @@ function ProcessVideos
             $tblChaptersInVideo = $chaptersInVideo.chapters
             $numChaptersInVideo = $tblChaptersInVideo.Length
 
-            if ($debug) { Write-Output "-- Number of chapters: $($numChaptersInVideo)." }
+            MessageLog "Number of chapters: $($numChaptersInVideo)." "debug"
 
             # if there are any chapters in this video, remove any "Advertisement" chapters and trim off the Playon tags
             if ($numChaptersInVideo -gt 0) 
@@ -104,26 +171,26 @@ function ProcessVideos
                         if ($chapterCount -eq 1) 
                         {
                             $startSeconds = $startSeconds + $startSkipSeconds
-                            if ($debug) { Write-Output "--- trimming $($startSkipSeconds) seconds off start for Playon tag." }
+                            MessageLog "Trimming $($startSkipSeconds) seconds off start for Playon tag." "debug"
                         }
                         elseif ($chapterCount -eq $numChaptersInVideo) 
                         {
                             $endSeconds = $endSeconds - $endSkipSeconds
-                            if ($debug) { Write-Output "--- trimming $($endSkipSeconds) seconds off end for Playon tag." }
+                            MessageLog "Trimming $($endSkipSeconds) seconds off end for Playon tag." "debug"
                         }
 
                         # compute the duration of the clip
                         $durationSeconds = $endSeconds - $startSeconds
 
                         # copy the clipped chapter video to the output temporary video file path
-                        if ($debug) { Write-Output "-- $($startSeconds)-$($endSeconds) => $($durationSeconds): creating chapter temp file: $($outputChapterFile)." }
+                        MessageLog "$($startSeconds)-$($endSeconds) => $($durationSeconds): creating chapter temp file: $($outputChapterFile)." "debug"
                         ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
                     }
 
                     $chapterCount++
                 }
 
-                if ($debug) { Write-Output "-- building trimmed video from chapters => $($outputVideoFilePath)" }
+                MessageLog "Building trimmed video from chapters => $($outputVideoFilePath)" "debug"
 
                 # load the chapter video file names to concat into the temp file
                 $videosToConcat = Get-Item "$($tmpFilePathStart)_*.mp4"
@@ -145,36 +212,36 @@ function ProcessVideos
 
                 # get the original end time
                 $durationSecondsOrig = ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $videoFile
-                if ($debug) { Write-Output "-- Original end time: $($durationSecondsOrig)." }
+                MessageLog "Original end time: $($durationSecondsOrig)." "debug"
 
                 # compute the new start time
                 $startSeconds = $startSkipSeconds
-                if ($debug) { Write-Output "--- trimming $($startSkipSeconds) seconds off start for Playon tag." }
+                MessageLog "Trimming $($startSkipSeconds) seconds off start for Playon tag." "debug"
 
                 # compute the new duration
                 $durationSeconds = $durationSecondsOrig - $startSeconds - $endSkipSeconds
-                if ($debug) { Write-Output "--- trimming $($endSkipSeconds) seconds off end for Playon tag." }
+                MessageLog "Trimming $($endSkipSeconds) seconds off end for Playon tag." "debug"
 
                 # copy the trimmed video to the output video file path and compress
-                if ($debug) { Write-Output "-- $($startSeconds) => $($durationSeconds): creating trimmed video file: $($outputVideoFilePath). Compressing: $($compress). " }
+                MessageLog "$($startSeconds) => $($durationSeconds): creating trimmed video file: $($outputVideoFilePath). Compressing: $($compress). " "debug"
                 if ($compress) { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -b:v $videoRate -b:a $audioRate $outputVideoFilePath }
                 else { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputVideoFilePath }
             }
 
-            Write-Output "- Completed: $($outputVideoFilePath)"
+           MessageLog "Completed: $($outputVideoFilePath)"
         }
         else 
         {
-            Write-Output "`r`nSKIPPING: output video already exists: $($outputVideoFilePath)"
+            MessageLog "SKIPPING: output video already exists: $($outputVideoFilePath)"
         }
 
         if ($deleteSource) 
         {         
             # if the file is not locked we can delete it.
-            $fileLocked = IsFileLocked($videoFile)
+            $fileLocked = IsFileLocked $videoFile
             if ($fileLocked -eq $false)
             {
-                Write-Output "Deleting source file: $($videoFile)"
+                MessageLog "Deleting source file: $($videoFile)"
                 Remove-Item $videoFile 
             }
         }
@@ -187,10 +254,20 @@ do
     #run thru the process now..
     ProcessVideos
 
+    if ($autoExit -eq $true)
+    {
+        $videoFilesToProcess = Get-ChildItem "$inputFolder*.mp4" -Recurse  
+        if ($videoFilesToProcess.Length -eq 0) 
+        {
+            MessageLog "No more videos to process and auto exit is set to true, exiting now."
+            exit
+        }           
+    }
+
     if ($retryTime -eq 0) { exit }
     
     #When done sleep for a few minutes then retry process
-    Write-Output "Press any key to exit, will retry in $($retryTime) minute(s), press space to retry immediately.";
+    MessageLog "Press any key to exit, will retry in $($retryTime) minute(s), press space to retry immediately." "console"
 
     $keyPressed = $false
     $timerCountdown = $retryTime * 60
@@ -211,5 +288,3 @@ do
     }    
 
 } until ($continue -eq $false)
-
-
