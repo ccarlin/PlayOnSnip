@@ -70,7 +70,7 @@ function MessageLog($message, $msgType)
     $timeStamp = "[{0:MM/dd/yy} {0:HH:mm:ss}]" -f (Get-Date)
     $logstring = "$($timeStamp) - $($message)"
 
-    if ($logFileLocation -eq "Console" -or $msgType -eq "console") { Write-Output $logstring }
+    if ($logFileLocation -eq "Console" -or $msgType -eq "console") { Write-Host $logstring }
     else { Add-content $logFileLocation -value $logstring }
 }
 
@@ -86,6 +86,10 @@ function isMovie($filePath)
     #If there is no movie length then everything goes to the one directory
     if ($movieLength -eq 0) { return $true }
 
+    #Check for regex match for TV Show s\d\de\d\d
+    if ($filePath -match 's\d\de\d\d') { return $false }
+ 
+    #If we don't have the season episode format check by length
     $videoLength = & ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $filePath
     if ($videoLength -gt $movieLength) { return $true }
     else { return $false }
@@ -162,7 +166,7 @@ function ProcessVideos
                     # so if we find any Advertisements that are longer than 5 minutes long, we include them even
                     # though the chapter has Advertisements in it so we don't miss some of the show.
                     $chapterTitle = $chapter.tags.title
-                    if ($chapterTitle -ne "Advertisement" -OR $durationSeconds -gt 600) 
+                    if ($chapterTitle -ne "Advertisement" -OR $durationSeconds -gt 600 -OR $durationSeconds -lt 1) 
                     {
                         # compute the output filename for this chapter
                         $outputChapterFile = ($tmpFilePathStart + "_{0:00}" -f $chapterId + "_" + $chapterTitle + $videoFile.Extension)
@@ -200,7 +204,8 @@ function ProcessVideos
                 }
 
                 # concat all the chapter video files into the output video file
-                if ($compress) { ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -b:v $videoRate -b:a $audioRate $outputVideoFilePath }
+                MessageLog "Concat files $($tmpFileName) to output file $($outputVideoFilePath)"
+                if ($compress) { ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath }
                 else { ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy $outputVideoFilePath }
 
                 # cleanup temporary files
@@ -224,8 +229,8 @@ function ProcessVideos
 
                 # copy the trimmed video to the output video file path and compress
                 MessageLog "$($startSeconds) => $($durationSeconds): creating trimmed video file: $($outputVideoFilePath). Compressing: $($compress). " "debug"
-                if ($compress) { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -b:v $videoRate -b:a $audioRate $outputVideoFilePath }
-                else { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputVideoFilePath }
+                if ($compress) { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath }
+                else { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy -map 0:0 -map 0:1 -map 0:2 $outputVideoFilePath}
             }
 
            MessageLog "Completed: $($outputVideoFilePath)"
@@ -281,7 +286,7 @@ do
         } 
         else
         {
-            sleep 1
+            Start-Sleep 1
             $timerCountdown = $timerCountdown - 1
             if ($timerCountdown -eq 0) { $keyPressed = $true }
         }
