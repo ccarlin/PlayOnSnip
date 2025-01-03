@@ -188,7 +188,9 @@ function ProcessVideos
 
                         # copy the clipped chapter video to the output temporary video file path
                         MessageLog "$($startSeconds)-$($endSeconds) => $($durationSeconds): creating chapter temp file: $($outputChapterFile)." "debug"
-                        ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
+                        # Changes from recommendation found here: https://github.com/ccarlin/PlayOnSnip/issues/1
+                        # ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
+                        ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy -map 0:v -map 0:s -scodec mov_text -map 0:a? $outputChapterFile
                     }
 
                     $chapterCount++
@@ -205,8 +207,19 @@ function ProcessVideos
 
                 # concat all the chapter video files into the output video file
                 MessageLog "Concat files $($tmpFileName) to output file $($outputVideoFilePath)"
-                if ($compress) { ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath }
-                else { ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy $outputVideoFilePath }
+                if ($compress) 
+                { 
+                    # Changes from recommendation found here: https://github.com/ccarlin/PlayOnSnip/issues/1
+                    # ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath 
+                    ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -map 0 -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath
+                }
+                else 
+                { 
+                    # Changes from recommendation found here: https://github.com/ccarlin/PlayOnSnip/issues/1
+                    # ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy $outputVideoFilePath 
+                    # ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy -scodec copy $outputVideoFilePath
+                    ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -map 0 -c copy -scodec copy $outputVideoFilePath                    
+                }
 
                 # cleanup temporary files
                 if ($deleteTempFiles) { Remove-Item $tmpFilePathStart*.* }
