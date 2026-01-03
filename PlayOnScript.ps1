@@ -12,15 +12,15 @@ $endSkipSeconds = 6
 $retryTime = 5
 
 #exit process if we are out of files to process (including in progress recordings)
-$autoExit = $true
+$autoExit = $false
 
 # where are the videos to convert
-$inputFolder = "D:\Videos\PlayOn\"
+$inputFolder = "C:\Users\ccarl\Videos\PlayOn\"
 
 # where do you want the trimmed videos to be stored
 # if you only need one location set movieLength to 0 and put the location in outputMovies
-$outputMovies = "Z:\Movies\"
-$outputTelevision = "Z:\PlayOn\"
+$outputMovies = "D:\Snapstream\Movies\"
+$outputTelevision = "D:\Snapstream\PlayOn\"
 $movieLength = 4000
 
 # optional compress settings
@@ -28,11 +28,14 @@ $compress = $true
 $videoRate = "1M"
 $audioRate = "156k"
 
+# use hardware acceleration for encoding/decoding (nvidia, amd, or none)
+$hardwareAccelType = "nvidia"  # Options: "nvidia", "amd", "none"
+
 # optionally delete files when done
 $deleteSource = $true
 
 # Log file location (console for screen or filepath to disk)
-$logFileLocation = "d:\videos\PlayOn\LogFile.txt"
+$logFileLocation = "D:\Snapstream\LogFile.txt"
 #$logFileLocation = "Console"
 
 ###################################################################################################################
@@ -88,7 +91,7 @@ function isMovie($filePath)
 
     #Check for regex match for TV Show s\d\de\d\d
     if ($filePath -match 's\d\de\d\d') { return $false }
- 
+
     #If we don't have the season episode format check by length
     $videoLength = & ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $filePath
     if ($videoLength -gt $movieLength) { return $true }
@@ -99,6 +102,8 @@ function ProcessVideos
 {
     # get a list of videos files to trim
     $videoFilesToProcess = Get-ChildItem "$inputFolder*.mp4" -Recurse
+
+    MessageLog "Video Files to Process: $($videoFilesToProcess) from folder $($inputFolder)" "debug"
 
     # for each video file in the list...
     foreach ($videoFile in $videoFilesToProcess) 
@@ -188,9 +193,13 @@ function ProcessVideos
 
                         # copy the clipped chapter video to the output temporary video file path
                         MessageLog "$($startSeconds)-$($endSeconds) => $($durationSeconds): creating chapter temp file: $($outputChapterFile)." "debug"
-                        # Changes from recommendation found here: https://github.com/ccarlin/PlayOnSnip/issues/1
-                        # ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
-                        ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy -map 0:v -map 0:s -scodec mov_text -map 0:a? $outputChapterFile
+                        if ($hardwareAccelType -eq "nvidia") {
+                            ffmpeg -loglevel panic -hwaccel cuda -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
+                        } elseif ($hardwareAccelType -eq "amd") {
+                            ffmpeg -loglevel panic -hwaccel d3d11va -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
+                        } else {
+                            ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
+                        }
                     }
 
                     $chapterCount++
@@ -207,19 +216,11 @@ function ProcessVideos
 
                 # concat all the chapter video files into the output video file
                 MessageLog "Concat files $($tmpFileName) to output file $($outputVideoFilePath)"
-                if ($compress) 
-                { 
-                    # Changes from recommendation found here: https://github.com/ccarlin/PlayOnSnip/issues/1
-                    # ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath 
-                    ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -map 0 -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath
+                if ($compress) { 
+                    # Hardware acceleration with concat can be problematic, use software encoding
+                    ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath 
                 }
-                else 
-                { 
-                    # Changes from recommendation found here: https://github.com/ccarlin/PlayOnSnip/issues/1
-                    # ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy $outputVideoFilePath 
-                    # ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy -scodec copy $outputVideoFilePath
-                    ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -map 0 -c copy -scodec copy $outputVideoFilePath                    
-                }
+                else { ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy $outputVideoFilePath }
 
                 # cleanup temporary files
                 if ($deleteTempFiles) { Remove-Item $tmpFilePathStart*.* }
@@ -242,8 +243,16 @@ function ProcessVideos
 
                 # copy the trimmed video to the output video file path and compress
                 MessageLog "$($startSeconds) => $($durationSeconds): creating trimmed video file: $($outputVideoFilePath). Compressing: $($compress). " "debug"
-                if ($compress) { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath }
-                else { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy -map 0:0 -map 0:1 -map 0:2 $outputVideoFilePath}
+                if ($compress) { 
+                    if ($hardwareAccelType -eq "nvidia") {
+                        ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c:v h264_nvenc -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $outputVideoFilePath 
+                    } elseif ($hardwareAccelType -eq "amd") {
+                        ffmpeg -hwaccel d3d11va -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c:v h264_amf -b:v $videoRate -c:a copy -c:s mov_text $outputVideoFilePath 
+                    } else {
+                        ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath 
+                    }
+                }
+                else { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputVideoFilePath }
             }
 
            MessageLog "Completed: $($outputVideoFilePath)"
@@ -306,3 +315,5 @@ do
     }    
 
 } until ($continue -eq $false)
+
+
