@@ -3,45 +3,58 @@
 #
 
 # C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -noexit -ExecutionPolicy Bypass -File "D:\Documents\My Projects\PlayOnSnip\PlayOnRemoveCommercials.ps1"
+# Optional: Pass configuration file as parameter: -ConfigFile "C:\path\to\config.json"
 
-# amount of time at beginning and end of video to trim off video to remove Playon tags
-$startSkipSeconds = 5
-$endSkipSeconds = 6
+# Accept optional config file parameter
+param(
+    [string]$ConfigFile = ""
+)
 
-#number of minutes to retry waiting for files set to zero for no retrying
-$retryTime = 5
+# Function to load configuration from JSON file
+function LoadConfiguration([string]$configPath) {
+    if ([string]::IsNullOrEmpty($configPath)) {
+        $configPath = Join-Path -Path $PSScriptRoot -ChildPath "PlayOnConfig.json"
+    }
+    
+    if (Test-Path $configPath) {
+        try {
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+            return $config
+        }
+        catch {
+            Write-Host "Error loading configuration file: $_"
+            exit 1
+        }
+    }
+    else {
+        Write-Host "Configuration file not found: $configPath"
+        exit 1
+    }
+}
 
-#exit process if we are out of files to process (including in progress recordings)
-$autoExit = $false
+# Load configuration
+$config = LoadConfiguration $ConfigFile
 
-# where are the videos to convert
-$inputFolder = "C:\Users\ccarl\Videos\PlayOn\"
-
-# where do you want the trimmed videos to be stored
-# if you only need one location set movieLength to 0 and put the location in outputMovies
-$outputMovies = "D:\Snapstream\Movies\"
-$outputTelevision = "D:\Snapstream\PlayOn\"
-$movieLength = 4000
-
-# optional compress settings
-$compress = $true
-$videoRate = "1M"
-$audioRate = "156k"
-
-# use hardware acceleration for encoding/decoding (nvidia, amd, or none)
-$hardwareAccelType = "nvidia"  # Options: "nvidia", "amd", "none"
-
-# optionally delete files when done
-$deleteSource = $true
-
-# Log file location (console for screen or filepath to disk)
-$logFileLocation = "D:\Snapstream\LogFile.txt"
-#$logFileLocation = "Console"
+# Apply configuration values to script variables
+$startSkipSeconds = $config.startSkipSeconds
+$endSkipSeconds = $config.endSkipSeconds
+$retryTime = $config.retryTime
+$autoExit = $config.autoExit
+$inputFolder = $config.inputFolder
+$outputMovies = $config.outputMovies
+$outputTelevision = $config.outputTelevision
+$movieLength = $config.movieLength
+$compress = $config.compress
+$videoRate = $config.videoRate
+$audioRate = $config.audioRate
+$hardwareAccelType = $config.hardwareAccelType
+$deleteSource = $config.deleteSource
+$logFileLocation = $config.logFileLocation
 
 ###################################################################################################################
 # do not change anything below here unless you know what you are doing
 ###################################################################################################################
-$debug = $false
+$debug = $true
 $deleteTempFiles = $true
 $runLowerPriority = $true
 
@@ -196,7 +209,7 @@ function ProcessVideos
                         if ($hardwareAccelType -eq "nvidia") {
                             ffmpeg -loglevel panic -hwaccel cuda -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
                         } elseif ($hardwareAccelType -eq "amd") {
-                            ffmpeg -loglevel panic -hwaccel d3d11va -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
+                            ffmpeg -loglevel panic -hwaccel d3d11va -ss $startSeconds -i $videoFile -t $durationSeconds -c:v h264 -preset fast -crf 23 -c:a copy $outputChapterFile
                         } else {
                             ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
                         }
@@ -247,7 +260,7 @@ function ProcessVideos
                     if ($hardwareAccelType -eq "nvidia") {
                         ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c:v h264_nvenc -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $outputVideoFilePath 
                     } elseif ($hardwareAccelType -eq "amd") {
-                        ffmpeg -hwaccel d3d11va -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c:v h264_amf -b:v $videoRate -c:a copy -c:s mov_text $outputVideoFilePath 
+                        ffmpeg -hwaccel d3d11va -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -vf scale=1280:720 -c:v h264_amf -b:v $videoRate -r 30 -c:a copy -c:s mov_text $outputVideoFilePath 
                     } else {
                         ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath 
                     }
@@ -294,7 +307,7 @@ do
     if ($retryTime -eq 0) { exit }
     
     #When done sleep for a few minutes then retry process
-    MessageLog "Press any key to exit, will retry in $($retryTime) minute(s), press space to retry immediately." "console"
+    MessageLog "Press any key to exit, 'r' to reload config, will retry in $($retryTime) minute(s), press space to retry immediately." "console"
 
     $keyPressed = $false
     $timerCountdown = $retryTime * 60
@@ -304,7 +317,35 @@ do
         {        
             $keyPressed = $true
             $key = $Host.UI.RawUI.ReadKey()          
-            if ($key.Character -ne ' ') { $continue = $false }
+            if ($key.Character -eq ' ') {
+                # Space pressed - continue immediately
+            }
+            elseif ($key.Character -eq 'r' -or $key.Character -eq 'R') {
+                # R pressed - reload configuration
+                MessageLog "Reloading configuration from file..." "console"
+                $config = LoadConfiguration $ConfigFile
+                $startSkipSeconds = $config.startSkipSeconds
+                $endSkipSeconds = $config.endSkipSeconds
+                $retryTime = $config.retryTime
+                $autoExit = $config.autoExit
+                $inputFolder = $config.inputFolder
+                $outputMovies = $config.outputMovies
+                $outputTelevision = $config.outputTelevision
+                $movieLength = $config.movieLength
+                $compress = $config.compress
+                $videoRate = $config.videoRate
+                $audioRate = $config.audioRate
+                $hardwareAccelType = $config.hardwareAccelType
+                $deleteSource = $config.deleteSource
+                $logFileLocation = $config.logFileLocation
+                MessageLog "Configuration reloaded successfully." "console"
+                # Restart the loop with updated config
+                $keyPressed = $true
+            }
+            else {
+                # Any other key - exit
+                $continue = $false
+            }
         } 
         else
         {

@@ -1,0 +1,19 @@
+{
+  "startSkipSeconds": 5,
+  "endSkipSeconds": 6,
+  "retryTime": 5,
+  "autoExit": false,
+  "inputFolder": "[PATH_TO_SOURCE_VIDEOS]",
+  "outputMovies": "[PATH_TO_MOVIES_OUTPUT]",
+  "outputTelevision": "[PATH_TO_TV_SHOWS_OUTPUT]",
+  "movieLength": 4000,
+  "compress": true,
+  "videoRate": "[Video BitRate for Compression]",
+  "audioRate": "[Audio BitRate for Compression]",
+  "hardwareAccelType": "[nvidia/amd/none]",
+  "deleteSource": true,
+  "logFileLocation": "[PATH_TO_LOG_FILE]",
+  "debug": true,
+  "deleteTempFiles": true,
+  "runLowerPriority": true
+}
