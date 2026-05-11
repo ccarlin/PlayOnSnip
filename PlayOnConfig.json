@@ -10,7 +10,7 @@
   "compress": true,
   "videoRate": "[Video BitRate for Compression]",
   "audioRate": "[Audio BitRate for Compression]",
-  "hardwareAccelType": "[nvidia/amd/none]",
+  "hardwareAccelType": "[nvidia/amd/intel/none]",
   "deleteSource": true,
   "logFileLocation": "[PATH_TO_LOG_FILE]",
   "debug": true,

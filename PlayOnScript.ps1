@@ -139,7 +139,7 @@ function ProcessVideos
         { 
             $outputFolder = $outputTelevision 
             $outputVideoFilePath = $videoFile.FullName.Replace($inputFolder, $outputFolder)
-            $outputVideoFolderPath = $outputVideoFilePath.Replace($videoFile.Name,"")
+            $outputVideoFolderPath = $outputVideoFilePath.Replace($videoFile.Name,"")            
         }
 
         MessageLog "Output Folder: $($outputFolder), Output Video File Path: $($outputVideoFilePath), Output Video Folder Path: $($outputVideoFolderPath)" "debug"
@@ -209,7 +209,9 @@ function ProcessVideos
                         if ($hardwareAccelType -eq "nvidia") {
                             ffmpeg -loglevel panic -hwaccel cuda -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
                         } elseif ($hardwareAccelType -eq "amd") {
-                            ffmpeg -loglevel panic -hwaccel d3d11va -ss $startSeconds -i $videoFile -t $durationSeconds -c:v h264 -preset fast -crf 23 -c:a copy $outputChapterFile
+                            ffmpeg -loglevel panic -hwaccel d3d11va -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
+                        } elseif ($hardwareAccelType -eq "intel") {
+                            ffmpeg -loglevel panic -hwaccel qsv -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
                         } else {
                             ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
                         }
@@ -227,13 +229,29 @@ function ProcessVideos
                     "file '" + $videoToConcat.FullName + "'" | Out-File $tmpFileName -Append -encoding default
                 }
 
-                # concat all the chapter video files into the output video file
+                # concat all the chapter video files into the output video file (without compression)
                 MessageLog "Concat files $($tmpFileName) to output file $($outputVideoFilePath)"
-                if ($compress) { 
-                    # Hardware acceleration with concat can be problematic, use software encoding
-                    ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath 
+                ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy $outputVideoFilePath
+                
+                # If compression is enabled, compress the concatenated file afterwards
+                if ($compress) {
+                    MessageLog "Compressing concatenated video: $($outputVideoFilePath)"
+                    $tmpCompressFile = $outputVideoFilePath + ".tmp.mp4"
+                    Rename-Item $outputVideoFilePath $tmpCompressFile
+                    
+                    if ($hardwareAccelType -eq "nvidia") {
+                        ffmpeg -loglevel panic -i $tmpCompressFile -c:v h264_nvenc -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $outputVideoFilePath
+                    } elseif ($hardwareAccelType -eq "amd") {
+                        ffmpeg -hwaccel d3d11va -loglevel panic -i $tmpCompressFile -vf scale=1280:720 -c:v h264_amf -b:v $videoRate -r 30 -c:a copy -c:s mov_text $outputVideoFilePath
+                    } elseif ($hardwareAccelType -eq "intel") {
+                        ffmpeg -hwaccel qsv -loglevel panic -i $tmpCompressFile -c:v h264_qsv -preset fast -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $outputVideoFilePath
+                    } else {
+                        ffmpeg -loglevel panic -i $tmpCompressFile -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath
+                    }
+                    
+                    # Clean up temporary compression file
+                    Remove-Item $tmpCompressFile
                 }
-                else { ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy $outputVideoFilePath }
 
                 # cleanup temporary files
                 if ($deleteTempFiles) { Remove-Item $tmpFilePathStart*.* }
@@ -261,6 +279,8 @@ function ProcessVideos
                         ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c:v h264_nvenc -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $outputVideoFilePath 
                     } elseif ($hardwareAccelType -eq "amd") {
                         ffmpeg -hwaccel d3d11va -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -vf scale=1280:720 -c:v h264_amf -b:v $videoRate -r 30 -c:a copy -c:s mov_text $outputVideoFilePath 
+                    } elseif ($hardwareAccelType -eq "intel") {
+                        ffmpeg -hwaccel qsv -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c:v h264_qsv -preset fast -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $outputVideoFilePath 
                     } else {
                         ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath 
                     }
