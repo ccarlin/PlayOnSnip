@@ -50,13 +50,9 @@ $audioRate = $config.audioRate
 $hardwareAccelType = $config.hardwareAccelType
 $deleteSource = $config.deleteSource
 $logFileLocation = $config.logFileLocation
-
-###################################################################################################################
-# do not change anything below here unless you know what you are doing
-###################################################################################################################
-$debug = $true
-$deleteTempFiles = $true
-$runLowerPriority = $true
+$debug = $config.debug
+$deleteTempFiles = $config.deleteTempFiles
+$runLowerPriority = $config.runLowerPriority
 
 
 ###################################################################################################################
@@ -116,7 +112,11 @@ function ProcessVideos
     # get a list of videos files to trim
     $videoFilesToProcess = Get-ChildItem "$inputFolder*.mp4" -Recurse
 
-    MessageLog "Video Files to Process: $($videoFilesToProcess) from folder $($inputFolder)" "debug"
+    # only log the warning if there are videos to process, otherwise it just clutters the logs when there are no videos to process
+    if ($videoFilesToProcess.Length -eq 0)
+    {
+        MessageLog "Video Files to Process: $($videoFilesToProcess) from folder $($inputFolder)" "debug"
+    }   
 
     # for each video file in the list...
     foreach ($videoFile in $videoFilesToProcess) 
@@ -138,7 +138,9 @@ function ProcessVideos
         else 
         { 
             $outputFolder = $outputTelevision 
+            MessageLog "Television show detected. Output Folder: $($outputFolder)" "debug"
             $outputVideoFilePath = $videoFile.FullName.Replace($inputFolder, $outputFolder)
+            MessageLog "Replacing input folder $($inputFolder) with $($outputFolder). Output video file path: $($outputVideoFilePath)" "debug"
             $outputVideoFolderPath = $outputVideoFilePath.Replace($videoFile.Name,"")            
         }
 
@@ -164,8 +166,7 @@ function ProcessVideos
             if ($numChaptersInVideo -gt 0) 
             {
                 # create a temp file to store trimmed video chapter file paths in
-                $tmpFile = New-TemporaryFile
-                $tmpFileName = $tmpFile.FullName
+                $tmpFileName = [System.IO.Path]::GetTempFileName()
                 $tmpFilePathStart = $tmpFileName.Substring(0, $tmpFileName.LastIndexOf('.'))
 
                 $chapterCount = 1
@@ -229,32 +230,40 @@ function ProcessVideos
                     "file '" + $videoToConcat.FullName + "'" | Out-File $tmpFileName -Append -encoding default
                 }
 
-                # concat all the chapter video files into the output video file (without compression)
-                MessageLog "Concat files $($tmpFileName) to output file $($outputVideoFilePath)"
-                ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy $outputVideoFilePath
+                # Create temp concat file in temp directory to avoid issues with output path
+                $tmpConcatFile = $tmpFilePathStart + "_concat.mp4"
+                MessageLog "Concat files $($tmpFileName) to temp concat file $($tmpConcatFile)"
+                ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy $tmpConcatFile
                 
-                # If compression is enabled, compress the concatenated file afterwards
+                # If compression is enabled, compress the concatenated file in temp directory first
                 if ($compress) {
-                    MessageLog "Compressing concatenated video: $($outputVideoFilePath)"
-                    $tmpCompressFile = $outputVideoFilePath + ".tmp.mp4"
-                    Rename-Item $outputVideoFilePath $tmpCompressFile
+                    MessageLog "Compressing concatenated video in temp directory"
+                    $tmpCompressFile = $tmpFilePathStart + "_compressed.mp4"
                     
                     if ($hardwareAccelType -eq "nvidia") {
-                        ffmpeg -loglevel panic -i $tmpCompressFile -c:v h264_nvenc -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $outputVideoFilePath
+                        ffmpeg -loglevel panic -i $tmpConcatFile -c:v h264_nvenc -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
                     } elseif ($hardwareAccelType -eq "amd") {
-                        ffmpeg -hwaccel d3d11va -loglevel panic -i $tmpCompressFile -vf scale=1280:720 -c:v h264_amf -b:v $videoRate -r 30 -c:a copy -c:s mov_text $outputVideoFilePath
+                        ffmpeg -hwaccel d3d11va -loglevel panic -i $tmpConcatFile -vf scale=1280:720 -c:v h264_amf -b:v $videoRate -r 30 -c:a copy -c:s mov_text $tmpCompressFile
                     } elseif ($hardwareAccelType -eq "intel") {
-                        ffmpeg -hwaccel qsv -loglevel panic -i $tmpCompressFile -c:v h264_qsv -preset fast -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $outputVideoFilePath
+                        ffmpeg -hwaccel qsv -loglevel panic -i $tmpConcatFile -c:v h264_qsv -preset fast -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
                     } else {
-                        ffmpeg -loglevel panic -i $tmpCompressFile -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath
+                        ffmpeg -loglevel panic -i $tmpConcatFile -b:v $videoRate -b:a $audioRate -c:s mov_text $tmpCompressFile
                     }
                     
-                    # Clean up temporary compression file
-                    Remove-Item $tmpCompressFile
+                    # Move compressed file from temp directory to output location
+                    Move-Item $tmpCompressFile $outputVideoFilePath -Force
+                    MessageLog "Moved compressed video to output location: $($outputVideoFilePath)"
+                } else {
+                    # Move uncompressed concat file to output location
+                    Move-Item $tmpConcatFile $outputVideoFilePath -Force
+                    MessageLog "Moved concatenated video to output location: $($outputVideoFilePath)"
                 }
 
                 # cleanup temporary files
-                if ($deleteTempFiles) { Remove-Item $tmpFilePathStart*.* }
+                if ($deleteTempFiles) { 
+                    Remove-Item $tmpFilePathStart*.* -ErrorAction SilentlyContinue
+                    Remove-Item $tmpFileName -ErrorAction SilentlyContinue
+                }
             }
             else 
             { 
