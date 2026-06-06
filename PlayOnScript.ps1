@@ -60,21 +60,17 @@ $runLowerPriority = $config.runLowerPriority
 ###################################################################################################################
 
 #Run at a lower priority if running compression
-if ($runLowerPriority -eq $true -And $compress -eq $true)
-{
+if ($runLowerPriority -eq $true -And $compress -eq $true) {
     $process = Get-Process -Id $pid
     $process.PriorityClass = 'BelowNormal' 
 }
 
 # Universal message hanadler
-function MessageLog($message, $msgType)
-{
+function MessageLog($message, $msgType) {
     #check if the message is only for debugging purposes
-    if ($msgType -eq "debug")
-    {
+    if ($msgType -eq "debug") {
         #check if we are set to view debug messages if not exit function
-        if ($debug -ne $true)
-        {
+        if ($debug -ne $true) {
             return
         }
     }
@@ -86,15 +82,13 @@ function MessageLog($message, $msgType)
     else { Add-content $logFileLocation -value $logstring }
 }
 
-function IsFileLocked($filePath) 
-{    
+function IsFileLocked($filePath) {    
     Rename-Item $filePath $filePath -ErrorVariable errs -ErrorAction SilentlyContinue
     return ($errs.Count -ne 0)
 }
 
 #check if the video is a movie soley by total length of the video
-function isMovie($filePath)
-{
+function isMovie($filePath) {
     #If there is no movie length then everything goes to the one directory
     if ($movieLength -eq 0) { return $true }
 
@@ -107,49 +101,42 @@ function isMovie($filePath)
     else { return $false }
 }
 
-function ProcessVideos
-{
+function ProcessVideos {
     # get a list of videos files to trim
     $videoFilesToProcess = Get-ChildItem "$inputFolder*.mp4" -Recurse
 
     # only log the warning if there are videos to process, otherwise it just clutters the logs when there are no videos to process
-    if ($videoFilesToProcess.Length -eq 0)
-    {
+    if ($videoFilesToProcess.Length -eq 0) {
         MessageLog "Video Files to Process: $($videoFilesToProcess) from folder $($inputFolder)" "debug"
     }   
 
     # for each video file in the list...
-    foreach ($videoFile in $videoFilesToProcess) 
-    {
+    foreach ($videoFile in $videoFilesToProcess) {
         $fileLocked = IsFileLocked $videoFile
-        if ($fileLocked -eq $true)
-        {
+        if ($fileLocked -eq $true) {
             MessageLog "File: $($videoFile) is in process skipping."
             continue
         }
 
         # compute the file path to store the trimmed video
-        if (isMovie $videoFile -eq $true) 
-        { 
+        if (isMovie $videoFile -eq $true) { 
             $outputFolder = $outputMovies 
             $outputVideoFilePath = $outputMovies + $videoFile.Name
             $outputVideoFolderPath = $outputMovies 
         }
-        else 
-        { 
+        else { 
             $outputFolder = $outputTelevision 
             MessageLog "Television show detected. Output Folder: $($outputFolder)" "debug"
             $outputVideoFilePath = $videoFile.FullName.Replace($inputFolder, $outputFolder)
             MessageLog "Replacing input folder $($inputFolder) with $($outputFolder). Output video file path: $($outputVideoFilePath)" "debug"
-            $outputVideoFolderPath = $outputVideoFilePath.Replace($videoFile.Name,"")            
+            $outputVideoFolderPath = $outputVideoFilePath.Replace($videoFile.Name, "")            
         }
 
         MessageLog "Output Folder: $($outputFolder), Output Video File Path: $($outputVideoFilePath), Output Video Folder Path: $($outputVideoFolderPath)" "debug"
 
         
         # if it already exists, skip it, else continue...
-        if (!(Test-Path -Path $outputVideoFilePath)) 
-        {
+        if (!(Test-Path -Path $outputVideoFilePath)) {
             MessageLog "Processing: $($videoFile.FullName)"
         
             # if the output video folder does not exist, create it.
@@ -163,15 +150,13 @@ function ProcessVideos
             MessageLog "Number of chapters: $($numChaptersInVideo)." "debug"
 
             # if there are any chapters in this video, remove any "Advertisement" chapters and trim off the Playon tags
-            if ($numChaptersInVideo -gt 0) 
-            {
+            if ($numChaptersInVideo -gt 0) {
                 # create a temp file to store trimmed video chapter file paths in
                 $tmpFileName = [System.IO.Path]::GetTempFileName()
                 $tmpFilePathStart = $tmpFileName.Substring(0, $tmpFileName.LastIndexOf('.'))
 
                 $chapterCount = 1
-                foreach ($chapter in $tblChaptersInVideo) 
-                {
+                foreach ($chapter in $tblChaptersInVideo) {
                     $chapterId = $chapter.id
 
                     # compute the initial duration for the chapter
@@ -185,19 +170,16 @@ function ProcessVideos
                     # so if we find any Advertisements that are longer than 5 minutes long, we include them even
                     # though the chapter has Advertisements in it so we don't miss some of the show.
                     $chapterTitle = $chapter.tags.title
-                    if ($chapterTitle -ne "Advertisement" -OR $durationSeconds -gt 600 -OR $durationSeconds -lt 1) 
-                    {
+                    if ($chapterTitle -ne "Advertisement" -OR $durationSeconds -gt 600 -OR $durationSeconds -lt 1) {
                         # compute the output filename for this chapter
                         $outputChapterFile = ($tmpFilePathStart + "_{0:00}" -f $chapterId + "_" + $chapterTitle + $videoFile.Extension)
 
                         # trim off the start and end Playon tags
-                        if ($chapterCount -eq 1) 
-                        {
+                        if ($chapterCount -eq 1) {
                             $startSeconds = $startSeconds + $startSkipSeconds
                             MessageLog "Trimming $($startSkipSeconds) seconds off start for Playon tag." "debug"
                         }
-                        elseif ($chapterCount -eq $numChaptersInVideo) 
-                        {
+                        elseif ($chapterCount -eq $numChaptersInVideo) {
                             $endSeconds = $endSeconds - $endSkipSeconds
                             MessageLog "Trimming $($endSkipSeconds) seconds off end for Playon tag." "debug"
                         }
@@ -209,11 +191,14 @@ function ProcessVideos
                         MessageLog "$($startSeconds)-$($endSeconds) => $($durationSeconds): creating chapter temp file: $($outputChapterFile)." "debug"
                         if ($hardwareAccelType -eq "nvidia") {
                             ffmpeg -loglevel panic -hwaccel cuda -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
-                        } elseif ($hardwareAccelType -eq "amd") {
+                        }
+                        elseif ($hardwareAccelType -eq "amd") {
                             ffmpeg -loglevel panic -hwaccel d3d11va -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
-                        } elseif ($hardwareAccelType -eq "intel") {
+                        }
+                        elseif ($hardwareAccelType -eq "intel") {
                             ffmpeg -loglevel panic -hwaccel qsv -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
-                        } else {
+                        }
+                        else {
                             ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
                         }
                     }
@@ -225,8 +210,7 @@ function ProcessVideos
 
                 # load the chapter video file names to concat into the temp file
                 $videosToConcat = Get-Item "$($tmpFilePathStart)_*.mp4"
-                foreach ($videoToConcat in $videosToConcat) 
-                {
+                foreach ($videoToConcat in $videosToConcat) {
                     "file '" + $videoToConcat.FullName + "'" | Out-File $tmpFileName -Append -encoding default
                 }
 
@@ -242,18 +226,22 @@ function ProcessVideos
                     
                     if ($hardwareAccelType -eq "nvidia") {
                         ffmpeg -loglevel panic -i $tmpConcatFile -c:v h264_nvenc -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
-                    } elseif ($hardwareAccelType -eq "amd") {
+                    }
+                    elseif ($hardwareAccelType -eq "amd") {
                         ffmpeg -hwaccel d3d11va -loglevel panic -i $tmpConcatFile -vf scale=1280:720 -c:v h264_amf -b:v $videoRate -r 30 -c:a copy -c:s mov_text $tmpCompressFile
-                    } elseif ($hardwareAccelType -eq "intel") {
+                    }
+                    elseif ($hardwareAccelType -eq "intel") {
                         ffmpeg -hwaccel qsv -loglevel panic -i $tmpConcatFile -c:v h264_qsv -preset fast -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
-                    } else {
+                    }
+                    else {
                         ffmpeg -loglevel panic -i $tmpConcatFile -b:v $videoRate -b:a $audioRate -c:s mov_text $tmpCompressFile
                     }
                     
                     # Move compressed file from temp directory to output location
                     Move-Item $tmpCompressFile $outputVideoFilePath -Force
                     MessageLog "Moved compressed video to output location: $($outputVideoFilePath)"
-                } else {
+                }
+                else {
                     # Move uncompressed concat file to output location
                     Move-Item $tmpConcatFile $outputVideoFilePath -Force
                     MessageLog "Moved concatenated video to output location: $($outputVideoFilePath)"
@@ -265,8 +253,7 @@ function ProcessVideos
                     Remove-Item $tmpFileName -ErrorAction SilentlyContinue
                 }
             }
-            else 
-            { 
+            else { 
                 # handle video files with no chapters, simply trim off the Playon tags
 
                 # get the original end time
@@ -286,30 +273,30 @@ function ProcessVideos
                 if ($compress) { 
                     if ($hardwareAccelType -eq "nvidia") {
                         ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c:v h264_nvenc -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $outputVideoFilePath 
-                    } elseif ($hardwareAccelType -eq "amd") {
+                    }
+                    elseif ($hardwareAccelType -eq "amd") {
                         ffmpeg -hwaccel d3d11va -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -vf scale=1280:720 -c:v h264_amf -b:v $videoRate -r 30 -c:a copy -c:s mov_text $outputVideoFilePath 
-                    } elseif ($hardwareAccelType -eq "intel") {
+                    }
+                    elseif ($hardwareAccelType -eq "intel") {
                         ffmpeg -hwaccel qsv -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c:v h264_qsv -preset fast -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $outputVideoFilePath 
-                    } else {
+                    }
+                    else {
                         ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath 
                     }
                 }
                 else { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputVideoFilePath }
             }
 
-           MessageLog "Completed: $($outputVideoFilePath)"
+            MessageLog "Completed: $($outputVideoFilePath)"
         }
-        else 
-        {
+        else {
             MessageLog "SKIPPING: output video already exists: $($outputVideoFilePath)"
         }
 
-        if ($deleteSource) 
-        {         
+        if ($deleteSource) {         
             # if the file is not locked we can delete it.
             $fileLocked = IsFileLocked $videoFile
-            if ($fileLocked -eq $false)
-            {
+            if ($fileLocked -eq $false) {
                 MessageLog "Deleting source file: $($videoFile)"
                 Remove-Item $videoFile 
             }
@@ -317,17 +304,15 @@ function ProcessVideos
     }
 }
 
+[System.Console]::Title = "Playon Video Processor"
 $continue = $true
-do
-{
+do {
     #run thru the process now..
     ProcessVideos
 
-    if ($autoExit -eq $true)
-    {
+    if ($autoExit -eq $true) {
         $videoFilesToProcess = Get-ChildItem "$inputFolder*.mp4" -Recurse  
-        if ($videoFilesToProcess.Length -eq 0) 
-        {
+        if ($videoFilesToProcess.Length -eq 0) {
             MessageLog "No more videos to process and auto exit is set to true, exiting now."
             exit
         }           
@@ -340,10 +325,8 @@ do
 
     $keyPressed = $false
     $timerCountdown = $retryTime * 60
-    while ($keyPressed -eq $false)
-    {       
-        if ([console]::KeyAvailable)
-        {        
+    while ($keyPressed -eq $false) {       
+        if ([console]::KeyAvailable) {        
             $keyPressed = $true
             $key = $Host.UI.RawUI.ReadKey()          
             if ($key.Character -eq ' ') {
@@ -376,8 +359,7 @@ do
                 $continue = $false
             }
         } 
-        else
-        {
+        else {
             Start-Sleep 1
             $timerCountdown = $timerCountdown - 1
             if ($timerCountdown -eq 0) { $keyPressed = $true }
