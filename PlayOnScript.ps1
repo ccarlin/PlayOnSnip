@@ -284,7 +284,10 @@ function ProcessVideos {
                         ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath 
                     }
                 }
-                else { ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputVideoFilePath }
+                else { 
+                    # No compression modified (thanks uspino2) for better subtitle handling
+                    ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -map 0:v -map 0:a -map 0:s? -c:v copy -c:a copy -c:s mov_text $outputVideoFilePath 
+                }
             }
 
             MessageLog "Completed: $($outputVideoFilePath)"
