@@ -134,170 +134,163 @@ function ProcessVideos {
 
         MessageLog "Output Folder: $($outputFolder), Output Video File Path: $($outputVideoFilePath), Output Video Folder Path: $($outputVideoFolderPath)" "debug"
 
-        
-        # if it already exists, skip it, else continue...
-        if (!(Test-Path -Path $outputVideoFilePath)) {
-            MessageLog "Processing: $($videoFile.FullName)"
-        
-            # if the output video folder does not exist, create it.
-            if (!(Test-Path -Path $outputVideoFolderPath )) { New-Item -ItemType directory -Path $outputVideoFolderPath | Out-Null }
-        
-            # get a table of the chapters in the video
-            $chaptersInVideo = & ffprobe -loglevel panic $videoFile -show_chapters -print_format json | ConvertFrom-Json
-            $tblChaptersInVideo = $chaptersInVideo.chapters
-            $numChaptersInVideo = $tblChaptersInVideo.Length
+        # if output already exists, skip it
+        if (Test-Path -Path $outputVideoFilePath) {
+            MessageLog "SKIPPING: output video already exists: $($outputVideoFilePath)"
+            if ($deleteSource) {         
+                $fileLocked = IsFileLocked $videoFile
+                if ($fileLocked -eq $false) {
+                    MessageLog "Deleting source file: $($videoFile)"
+                    Remove-Item $videoFile 
+                }
+            }
+            continue
+        }
 
-            MessageLog "Number of chapters: $($numChaptersInVideo)." "debug"
+        MessageLog "Processing: $($videoFile.FullName)"
 
-            # if there are any chapters in this video, remove any "Advertisement" chapters and trim off the Playon tags
-            if ($numChaptersInVideo -gt 0) {
-                # create a temp file to store trimmed video chapter file paths in
-                $tmpFileName = [System.IO.Path]::GetTempFileName()
-                $tmpFilePathStart = $tmpFileName.Substring(0, $tmpFileName.LastIndexOf('.'))
+        # ensure the output folder exists
+        if (!(Test-Path -Path $outputVideoFolderPath )) { New-Item -ItemType directory -Path $outputVideoFolderPath | Out-Null }
 
-                $chapterCount = 1
-                foreach ($chapter in $tblChaptersInVideo) {
-                    $chapterId = $chapter.id
+        # create a temp base for this video's intermediate files
+        $tmpBase = [System.IO.Path]::GetTempFileName()
+        $tmpBasePath = $tmpBase.Substring(0, $tmpBase.LastIndexOf('.'))
 
-                    # compute the initial duration for the chapter
-                    $startSeconds = $chapter.start / 1000.0
-                    $endSeconds = $chapter.end / 1000.0
-                    $durationSeconds = $endSeconds - $startSeconds
+        # get chapters metadata
+        $chaptersInVideo = & ffprobe -loglevel panic $videoFile -show_chapters -print_format json | ConvertFrom-Json
+        $tblChaptersInVideo = $chaptersInVideo.chapters
+        $numChaptersInVideo = $tblChaptersInVideo.Length
 
-                    # skip any chapters with the title of "Advertisement" unless they are longer than 5 minutes
-                    #
-                    # note: in some cases, chapters are mislabeled and have both video and advertisement in them
-                    # so if we find any Advertisements that are longer than 5 minutes long, we include them even
-                    # though the chapter has Advertisements in it so we don't miss some of the show.
-                    $chapterTitle = $chapter.tags.title
-                    if ($chapterTitle -ne "Advertisement" -OR $durationSeconds -gt 600 -OR $durationSeconds -lt 1) {
-                        # compute the output filename for this chapter
-                        $outputChapterFile = ($tmpFilePathStart + "_{0:00}" -f $chapterId + "_" + $chapterTitle + $videoFile.Extension)
+        MessageLog "Number of chapters: $($numChaptersInVideo)." "debug"
 
-                        # trim off the start and end Playon tags
-                        if ($chapterCount -eq 1) {
-                            $startSeconds = $startSeconds + $startSkipSeconds
-                            MessageLog "Trimming $($startSkipSeconds) seconds off start for Playon tag." "debug"
-                        }
-                        elseif ($chapterCount -eq $numChaptersInVideo) {
-                            $endSeconds = $endSeconds - $endSkipSeconds
-                            MessageLog "Trimming $($endSkipSeconds) seconds off end for Playon tag." "debug"
-                        }
+        if ($numChaptersInVideo -gt 0) {
+            # ============================================================
+            # CHAPTERS PATH — cut each chapter, then concat
+            # ============================================================
+            $chapterCount = 1
+            foreach ($chapter in $tblChaptersInVideo) {
+                $chapterId = $chapter.id
+                $chapterStart = $chapter.start / 1000.0
+                $chapterEnd   = $chapter.end / 1000.0
+                $chapterDuration = $chapterEnd - $chapterStart
 
-                        # compute the duration of the clip
-                        $durationSeconds = $endSeconds - $startSeconds
-
-                        # copy the clipped chapter video to the output temporary video file path
-                        MessageLog "$($startSeconds)-$($endSeconds) => $($durationSeconds): creating chapter temp file: $($outputChapterFile)." "debug"
-                        if ($hardwareAccelType -eq "nvidia") {
-                            ffmpeg -loglevel panic -hwaccel cuda -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
-                        }
-                        elseif ($hardwareAccelType -eq "amd") {
-                            ffmpeg -loglevel panic -hwaccel d3d11va -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
-                        }
-                        elseif ($hardwareAccelType -eq "intel") {
-                            ffmpeg -loglevel panic -hwaccel qsv -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
-                        }
-                        else {
-                            ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c copy $outputChapterFile
-                        }
-                    }
-
+                # skip Advertisement chapters under 10 min
+                $chapterTitle = $chapter.tags.title
+                if ($chapterTitle -eq "Advertisement" -AND $chapterDuration -le 600 -AND $chapterDuration -ge 1) {
                     $chapterCount++
+                    continue
                 }
 
-                MessageLog "Building trimmed video from chapters => $($outputVideoFilePath)" "debug"
-
-                # load the chapter video file names to concat into the temp file
-                $videosToConcat = Get-Item "$($tmpFilePathStart)_*.mp4"
-                foreach ($videoToConcat in $videosToConcat) {
-                    "file '" + $videoToConcat.FullName + "'" | Out-File $tmpFileName -Append -encoding default
+                # trim PlayOn tags from first and last chapters
+                if ($chapterCount -eq 1) {
+                    $chapterStart = $chapterStart + $startSkipSeconds
+                    MessageLog "Trimming $($startSkipSeconds)s off start of first chapter" "debug"
                 }
-
-                # Create temp concat file in temp directory to avoid issues with output path
-                $tmpConcatFile = $tmpFilePathStart + "_concat.mp4"
-                MessageLog "Concat files $($tmpFileName) to temp concat file $($tmpConcatFile)"
-                ffmpeg -loglevel panic -f concat -safe 0 -i $tmpFileName -c copy $tmpConcatFile
+                if ($chapterCount -eq $numChaptersInVideo) {
+                    $chapterEnd = $chapterEnd - $endSkipSeconds
+                    MessageLog "Trimming $($endSkipSeconds)s off end of last chapter" "debug"
+                }
                 
-                # If compression is enabled, compress the concatenated file in temp directory first
-                if ($compress) {
-                    MessageLog "Compressing concatenated video in temp directory"
-                    $tmpCompressFile = $tmpFilePathStart + "_compressed.mp4"
-                    
-                    if ($hardwareAccelType -eq "nvidia") {
-                        ffmpeg -loglevel panic -i $tmpConcatFile -c:v h264_nvenc -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
-                    }
-                    elseif ($hardwareAccelType -eq "amd") {
-                        ffmpeg -hwaccel d3d11va -loglevel panic -i $tmpConcatFile -vf scale=1280:720 -c:v h264_amf -b:v $videoRate -r 30 -c:a copy -c:s mov_text $tmpCompressFile
-                    }
-                    elseif ($hardwareAccelType -eq "intel") {
-                        ffmpeg -hwaccel qsv -loglevel panic -i $tmpConcatFile -c:v h264_qsv -preset fast -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
-                    }
-                    else {
-                        ffmpeg -loglevel panic -i $tmpConcatFile -b:v $videoRate -b:a $audioRate -c:s mov_text $tmpCompressFile
-                    }
-                    
-                    # Move compressed file from temp directory to output location
-                    Move-Item $tmpCompressFile $outputVideoFilePath -Force
-                    MessageLog "Moved compressed video to output location: $($outputVideoFilePath)"
-                }
-                else {
-                    # Move uncompressed concat file to output location
-                    Move-Item $tmpConcatFile $outputVideoFilePath -Force
-                    MessageLog "Moved concatenated video to output location: $($outputVideoFilePath)"
+                # guard against chapters smaller than 5 seconds
+                $chapterLength = $chapterEnd - $chapterStart
+                if ($chapterLength -lt 5) {
+                    MessageLog "WARNING: chapter $($chapterId) has less than 5 seconds after trim, skipping" "debug"
+                    $chapterCount++
+                    continue
                 }
 
-                # cleanup temporary files
-                if ($deleteTempFiles) { 
-                    Remove-Item $tmpFilePathStart*.* -ErrorAction SilentlyContinue
-                    Remove-Item $tmpFileName -ErrorAction SilentlyContinue
-                }
-            }
-            else { 
-                # handle video files with no chapters, simply trim off the Playon tags
+                # cut chapter using the unified clip command
+                $outputChapterFile = "$($tmpBasePath)_$("{0:00}" -f $chapterId)_$($chapterTitle).mkv"
+                MessageLog "Cutting chapter $($chapterId): $($chapterStart)-$($chapterEnd) => $($outputChapterFile)" "debug"
+                ffmpeg -loglevel panic -ss $chapterStart -i $videoFile -t $chapterLength -c:v:0 copy -c:a copy -c:s srt -map 0:v:0 -map 0:a -map 0:s -map_metadata -1 -avoid_negative_ts make_zero $outputChapterFile
 
-                # get the original end time
-                $durationSecondsOrig = ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $videoFile
-                MessageLog "Original end time: $($durationSecondsOrig)." "debug"
-
-                # compute the new start time
-                $startSeconds = $startSkipSeconds
-                MessageLog "Trimming $($startSkipSeconds) seconds off start for Playon tag." "debug"
-
-                # compute the new duration
-                $durationSeconds = $durationSecondsOrig - $startSeconds - $endSkipSeconds
-                MessageLog "Trimming $($endSkipSeconds) seconds off end for Playon tag." "debug"
-
-                # copy the trimmed video to the output video file path and compress
-                MessageLog "$($startSeconds) => $($durationSeconds): creating trimmed video file: $($outputVideoFilePath). Compressing: $($compress). " "debug"
-                if ($compress) { 
-                    if ($hardwareAccelType -eq "nvidia") {
-                        ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c:v h264_nvenc -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $outputVideoFilePath 
-                    }
-                    elseif ($hardwareAccelType -eq "amd") {
-                        ffmpeg -hwaccel d3d11va -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -vf scale=1280:720 -c:v h264_amf -b:v $videoRate -r 30 -c:a copy -c:s mov_text $outputVideoFilePath 
-                    }
-                    elseif ($hardwareAccelType -eq "intel") {
-                        ffmpeg -hwaccel qsv -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -c:v h264_qsv -preset fast -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $outputVideoFilePath 
-                    }
-                    else {
-                        ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -b:v $videoRate -b:a $audioRate -c:s mov_text $outputVideoFilePath 
-                    }
-                }
-                else { 
-                    # No compression modified (thanks uspino2) for better subtitle handling
-                    ffmpeg -loglevel panic -ss $startSeconds -i $videoFile -t $durationSeconds -map 0:v -map 0:a -map 0:s? -c:v copy -c:a copy -c:s mov_text $outputVideoFilePath 
-                }
+                $chapterCount++
             }
 
-            MessageLog "Completed: $($outputVideoFilePath)"
+            # concat all chapter clips (skip concat if only one clip)
+            $chapterClips = Get-Item "$($tmpBasePath)_*.mkv"
+            if ($chapterClips.Count -eq 1) {
+                $finalTemp = $chapterClips[0].FullName
+                MessageLog "Single chapter clip, skipping concat: $($finalTemp)" "debug"
+            }
+            else {
+                foreach ($clip in $chapterClips) {
+                    "file '" + $clip.FullName + "'" | Out-File $tmpBase -Append -encoding default
+                }
+
+                $tmpConcatFile = "$($tmpBasePath)_concat.mp4"
+                MessageLog "Concatenating $($chapterClips.Count) chapter clips => $($tmpConcatFile)" "debug"
+                # ffmpeg -loglevel panic -f concat -safe 0 -i $tmpBase -c copy -map 0 $tmpConcatFile
+                ffmpeg -loglevel panic -f concat -safe 0 -i $tmpBase -c:v copy -c:a copy -c:s mov_text -map 0 $tmpConcatFile
+
+                $finalTemp = $tmpConcatFile
+            }
         }
         else {
-            MessageLog "SKIPPING: output video already exists: $($outputVideoFilePath)"
+            # ============================================================
+            # NO CHAPTERS PATH — single cut with start/end trim
+            # ============================================================
+            $durationSecondsOrig = ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $videoFile
+            MessageLog "Original duration: $($durationSecondsOrig)s" "debug"
+
+            $clipStart = $startSkipSeconds
+            $clipEnd   = $durationSecondsOrig - $endSkipSeconds
+            $clipDuration = $clipEnd - $clipStart
+
+            MessageLog "Trimming $($startSkipSeconds)s off start, $($endSkipSeconds)s off end" "debug"
+
+            # guard against clips smaller than 5 seconds
+            if ($clipDuration -lt 5) {
+                MessageLog "WARNING: trimmed duration ($($clipDuration)s) is less than 5 seconds, skipping $($videoFile.Name)"
+                Remove-Item $tmpBase -ErrorAction SilentlyContinue
+                continue
+            }
+
+            # cut using the unified clip command
+            $tmpCutFile = "$($tmpBasePath)_cut.mp4"
+            MessageLog "Cutting $($clipStart)-$($clipEnd) => $($tmpCutFile)" "debug"
+            ffmpeg -loglevel panic -ss $clipStart -i $videoFile -t $clipEnd -c:v:0 copy -c:a copy -c:s copy -map 0:v:0 -map 0:a -map 0:s? -map_metadata -1 -avoid_negative_ts make_zero $tmpCutFile
+
+            $finalTemp = $tmpCutFile
         }
 
+        # ================================================================
+        # FINAL STEP — compress (if enabled) or move to output
+        # ================================================================
+        if ($compress) {
+            $tmpCompressFile = "$($tmpBasePath)_compressed.mp4"
+            MessageLog "Compressing final video to $($outputVideoFilePath)" "debug"
+
+            if ($hardwareAccelType -eq "nvidia") {
+                ffmpeg -hwaccel cuda -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v h264_nvenc -b:v $videoRate -a53cc 1 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+            }
+            elseif ($hardwareAccelType -eq "amd") {
+                ffmpeg -hwaccel d3d11va -loglevel panic -i $finalTemp -vf scale=1280:720 -map 0:v:0? -map 0:a:0? -map 0:s? -c:v h264_amf -b:v $videoRate -r 30 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+            }
+            elseif ($hardwareAccelType -eq "intel") {
+                ffmpeg -hwaccel qsv -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v h264_qsv -preset fast -b:v $videoRate -a53cc 1 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+            }
+            else {
+                ffmpeg -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -b:v $videoRate -b:a $audioRate -c:s mov_text $tmpCompressFile
+            }
+
+            Move-Item $tmpCompressFile $outputVideoFilePath -Force
+            MessageLog "Moved compressed video to output: $($outputVideoFilePath)"
+        }
+        else {
+            Move-Item $finalTemp $outputVideoFilePath -Force
+            MessageLog "Moved final video to output: $($outputVideoFilePath)"
+        }
+
+        # cleanup temp files
+        if ($deleteTempFiles) {
+            Remove-Item "$($tmpBasePath)*.*" -ErrorAction SilentlyContinue
+            Remove-Item $tmpBase -ErrorAction SilentlyContinue
+        }
+
+        MessageLog "Completed: $($outputVideoFilePath)"
+
         if ($deleteSource) {         
-            # if the file is not locked we can delete it.
             $fileLocked = IsFileLocked $videoFile
             if ($fileLocked -eq $false) {
                 MessageLog "Deleting source file: $($videoFile)"
