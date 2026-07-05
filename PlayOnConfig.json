@@ -11,6 +11,7 @@
   "videoRate": "[Video BitRate for Compression]",
   "audioRate": "[Audio BitRate for Compression]",
   "hardwareAccelType": "[nvidia/amd/intel/none]",
+  "useHevc": true,
   "deleteSource": true,
   "logFileLocation": "[PATH_TO_LOG_FILE]",
   "debug": true,

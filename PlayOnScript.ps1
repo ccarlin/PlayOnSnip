@@ -53,6 +53,7 @@ $logFileLocation = $config.logFileLocation
 $debug = $config.debug
 $deleteTempFiles = $config.deleteTempFiles
 $runLowerPriority = $config.runLowerPriority
+$useHevc = $config.useHevc
 
 
 ###################################################################################################################
@@ -262,16 +263,24 @@ function ProcessVideos {
             MessageLog "Compressing final video to $($outputVideoFilePath)" "debug"
 
             if ($hardwareAccelType -eq "nvidia") {
-                ffmpeg -hwaccel cuda -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v h264_nvenc -b:v $videoRate -a53cc 1 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                $nvencCodec = if ($useHevc) { "hevc_nvenc" } else { "h264_nvenc" }
+                ffmpeg -hwaccel cuda -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $nvencCodec -preset p7 -rc vbr -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
             }
             elseif ($hardwareAccelType -eq "amd") {
-                ffmpeg -hwaccel d3d11va -loglevel panic -i $finalTemp -vf scale=1280:720 -map 0:v:0? -map 0:a:0? -map 0:s? -c:v h264_amf -b:v $videoRate -r 30 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                $amfCodec = if ($useHevc) { "hevc_amf" } else { "h264_amf" }
+                ffmpeg -hwaccel d3d11va -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $amfCodec -quality quality -rc vbr_peak -qp_i 18 -qp_p 20 -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
             }
             elseif ($hardwareAccelType -eq "intel") {
-                ffmpeg -hwaccel qsv -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v h264_qsv -preset fast -b:v $videoRate -a53cc 1 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                $qsvCodec = if ($useHevc) { "hevc_qsv" } else { "h264_qsv" }
+                ffmpeg -hwaccel qsv -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $qsvCodec -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
             }
             else {
-                ffmpeg -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -b:v $videoRate -b:a $audioRate -c:s mov_text $tmpCompressFile
+                if ($useHevc) {
+                    ffmpeg -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v libx265 -preset medium -crf 26 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                }
+                else {
+                    ffmpeg -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v libx264 -preset slower -crf 20 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                }
             }
 
             Move-Item $tmpCompressFile $outputVideoFilePath -Force
@@ -346,6 +355,9 @@ do {
                 $hardwareAccelType = $config.hardwareAccelType
                 $deleteSource = $config.deleteSource
                 $logFileLocation = $config.logFileLocation
+                $deleteTempFiles = $config.deleteTempFiles
+                $runLowerPriority = $config.runLowerPriority
+                $useHevc = $config.useHevc
                 MessageLog "Configuration reloaded successfully." "console"
                 # Restart the loop with updated config
                 $keyPressed = $true
