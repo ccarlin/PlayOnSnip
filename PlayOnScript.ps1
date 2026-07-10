@@ -158,7 +158,7 @@ function ProcessVideos {
         $tmpBasePath = $tmpBase.Substring(0, $tmpBase.LastIndexOf('.'))
 
         # get chapters metadata
-        $chaptersInVideo = & ffprobe -loglevel panic $videoFile -show_chapters -print_format json | ConvertFrom-Json
+        $chaptersInVideo = & ffprobe -loglevel error $videoFile -show_chapters -print_format json | ConvertFrom-Json
         $tblChaptersInVideo = $chaptersInVideo.chapters
         $numChaptersInVideo = $tblChaptersInVideo.Length
 
@@ -203,7 +203,7 @@ function ProcessVideos {
                 # cut chapter using the unified clip command
                 $outputChapterFile = "$($tmpBasePath)_$("{0:00}" -f $chapterId)_$($chapterTitle).mkv"
                 MessageLog "Cutting chapter $($chapterId): $($chapterStart)-$($chapterEnd) => $($outputChapterFile)" "debug"
-                ffmpeg -loglevel panic -ss $chapterStart -i $videoFile -t $chapterLength -c:v:0 copy -c:a copy -c:s srt -map 0:v:0 -map 0:a -map 0:s -map_metadata -1 -avoid_negative_ts make_zero $outputChapterFile
+                ffmpeg -loglevel error -ss $chapterStart -i $videoFile -t $chapterLength -c:v:0 copy -c:a copy -c:s srt -map 0:v:0 -map 0:a -map 0:s? -map_metadata -1 -avoid_negative_ts make_zero $outputChapterFile
 
                 $chapterCount++
             }
@@ -221,8 +221,8 @@ function ProcessVideos {
 
                 $tmpConcatFile = "$($tmpBasePath)_concat.mp4"
                 MessageLog "Concatenating $($chapterClips.Count) chapter clips => $($tmpConcatFile)" "debug"
-                # ffmpeg -loglevel panic -f concat -safe 0 -i $tmpBase -c copy -map 0 $tmpConcatFile
-                ffmpeg -loglevel panic -f concat -safe 0 -i $tmpBase -c:v copy -c:a copy -c:s mov_text -map 0 $tmpConcatFile
+                # ffmpeg -loglevel error -f concat -safe 0 -i $tmpBase -c copy -map 0 $tmpConcatFile
+                ffmpeg -loglevel error -f concat -safe 0 -i $tmpBase -c:v copy -c:a copy -c:s mov_text -map 0 $tmpConcatFile
 
                 $finalTemp = $tmpConcatFile
             }
@@ -250,7 +250,7 @@ function ProcessVideos {
             # cut using the unified clip command
             $tmpCutFile = "$($tmpBasePath)_cut.mp4"
             MessageLog "Cutting $($clipStart)-$($clipEnd) => $($tmpCutFile)" "debug"
-            ffmpeg -loglevel panic -ss $clipStart -i $videoFile -t $clipEnd -c:v:0 copy -c:a copy -c:s copy -map 0:v:0 -map 0:a -map 0:s? -map_metadata -1 -avoid_negative_ts make_zero $tmpCutFile
+            ffmpeg -loglevel error -ss $clipStart -i $videoFile -t $clipEnd -c:v:0 copy -c:a copy -c:s copy -map 0:v:0 -map 0:a -map 0:s? -map_metadata -1 -avoid_negative_ts make_zero $tmpCutFile
 
             $finalTemp = $tmpCutFile
         }
@@ -264,27 +264,33 @@ function ProcessVideos {
 
             if ($hardwareAccelType -eq "nvidia") {
                 $nvencCodec = if ($useHevc) { "hevc_nvenc" } else { "h264_nvenc" }
-                ffmpeg -hwaccel cuda -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $nvencCodec -preset p7 -rc vbr -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                ffmpeg -hwaccel cuda -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $nvencCodec -preset p7 -rc vbr -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
             }
             elseif ($hardwareAccelType -eq "amd") {
                 $amfCodec = if ($useHevc) { "hevc_amf" } else { "h264_amf" }
-                ffmpeg -hwaccel d3d11va -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $amfCodec -quality quality -rc vbr_peak -qp_i 18 -qp_p 20 -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                ffmpeg -hwaccel d3d11va -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $amfCodec -quality quality -rc vbr_peak -qp_i 18 -qp_p 20 -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
             }
             elseif ($hardwareAccelType -eq "intel") {
                 $qsvCodec = if ($useHevc) { "hevc_qsv" } else { "h264_qsv" }
-                ffmpeg -hwaccel qsv -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $qsvCodec -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                ffmpeg -hwaccel qsv -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $qsvCodec -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
             }
             else {
                 if ($useHevc) {
-                    ffmpeg -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v libx265 -preset medium -crf 26 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                    ffmpeg -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v libx265 -preset medium -crf 26 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
                 }
                 else {
-                    ffmpeg -loglevel panic -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v libx264 -preset slower -crf 20 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                    ffmpeg -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v libx264 -preset slower -crf 20 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
                 }
             }
 
-            Move-Item $tmpCompressFile $outputVideoFilePath -Force
-            MessageLog "Moved compressed video to output: $($outputVideoFilePath)"
+            if (Test-Path $tmpCompressFile) {
+                Move-Item $tmpCompressFile $outputVideoFilePath -Force
+                MessageLog "Moved compressed video to output: $($outputVideoFilePath)"
+            }
+            else {
+                MessageLog "WARNING: Compression failed, using uncompressed video: $($outputVideoFilePath)"
+                Move-Item $finalTemp $outputVideoFilePath -Force
+            }
         }
         else {
             Move-Item $finalTemp $outputVideoFilePath -Force
