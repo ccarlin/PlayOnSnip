@@ -88,6 +88,45 @@ function IsFileLocked($filePath) {
     return ($errs.Count -ne 0)
 }
 
+function RunFFmpeg {
+    $Tool = "ffmpeg"
+    $callArgs = @($args)
+    if ($callArgs.Count -ge 2 -and $callArgs[0] -ieq "-Tool") {
+        $Tool = $callArgs[1]
+        $callArgs = @($callArgs[2..($callArgs.Count - 1)])
+    }
+    $rejoined = @()
+    $i = 0
+    while ($i -lt $callArgs.Count) {
+        $arg = "$($callArgs[$i])"
+        if ($arg -match '^\-[\w]+:$' -and ($i + 1) -lt $callArgs.Count) {
+            $rejoined += "$arg$($callArgs[$i + 1])"
+            $i += 2
+        }
+        else {
+            $rejoined += $arg
+            $i++
+        }
+    }
+    $stderrFile = [System.IO.Path]::GetTempFileName()
+    $stdoutFile = [System.IO.Path]::GetTempFileName()
+    $argString = ($rejoined | ForEach-Object { if ("$_" -match ' ') { "`"$_`"" } else { "$_" } }) -join ' '
+    $proc = Start-Process -FilePath $Tool -ArgumentList $argString -NoNewWindow -Wait -PassThru -RedirectStandardError $stderrFile -RedirectStandardOutput $stdoutFile
+    if ($proc.ExitCode -ne 0) {
+        $stderrOutput = Get-Content $stderrFile -ErrorAction SilentlyContinue
+        if ($stderrOutput) {
+            MessageLog "$Tool ERROR (exit $($proc.ExitCode)): $($stderrOutput -join '; ')"
+        }
+        else {
+            MessageLog "$Tool ERROR (exit $($proc.ExitCode)): no error details captured"
+        }
+    }
+    $stdoutContent = Get-Content $stdoutFile -Raw -ErrorAction SilentlyContinue
+    Remove-Item $stderrFile -ErrorAction SilentlyContinue
+    Remove-Item $stdoutFile -ErrorAction SilentlyContinue
+    return $stdoutContent
+}
+
 #check if the video is a movie soley by total length of the video
 function isMovie($filePath) {
     #If there is no movie length then everything goes to the one directory
@@ -97,7 +136,7 @@ function isMovie($filePath) {
     if ($filePath -match 's\d\de\d\d') { return $false }
 
     #If we don't have the season episode format check by length
-    $videoLength = & ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $filePath
+    $videoLength = RunFFmpeg -Tool ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $filePath
     if ($videoLength -gt $movieLength) { return $true }
     else { return $false }
 }
@@ -158,7 +197,7 @@ function ProcessVideos {
         $tmpBasePath = $tmpBase.Substring(0, $tmpBase.LastIndexOf('.'))
 
         # get chapters metadata
-        $chaptersInVideo = & ffprobe -loglevel error $videoFile -show_chapters -print_format json | ConvertFrom-Json
+        $chaptersInVideo = (RunFFmpeg -Tool ffprobe -loglevel error $videoFile -show_chapters -print_format json) | ConvertFrom-Json
         $tblChaptersInVideo = $chaptersInVideo.chapters
         $numChaptersInVideo = $tblChaptersInVideo.Length
 
@@ -203,7 +242,7 @@ function ProcessVideos {
                 # cut chapter using the unified clip command
                 $outputChapterFile = "$($tmpBasePath)_$("{0:00}" -f $chapterId)_$($chapterTitle).mkv"
                 MessageLog "Cutting chapter $($chapterId): $($chapterStart)-$($chapterEnd) => $($outputChapterFile)" "debug"
-                ffmpeg -loglevel error -ss $chapterStart -i $videoFile -t $chapterLength -c:v:0 copy -c:a copy -c:s srt -map 0:v:0 -map 0:a -map 0:s? -map_metadata -1 -avoid_negative_ts make_zero $outputChapterFile
+                RunFFmpeg -loglevel error -ss $chapterStart -i $videoFile -t $chapterLength -c:v:0 copy -c:a copy -c:s srt -map 0:v:0 -map 0:a -map 0:s? -map_metadata -1 -avoid_negative_ts make_zero $outputChapterFile
 
                 $chapterCount++
             }
@@ -222,7 +261,7 @@ function ProcessVideos {
                 $tmpConcatFile = "$($tmpBasePath)_concat.mp4"
                 MessageLog "Concatenating $($chapterClips.Count) chapter clips => $($tmpConcatFile)" "debug"
                 # ffmpeg -loglevel error -f concat -safe 0 -i $tmpBase -c copy -map 0 $tmpConcatFile
-                ffmpeg -loglevel error -f concat -safe 0 -i $tmpBase -c:v copy -c:a copy -c:s mov_text -map 0 $tmpConcatFile
+                RunFFmpeg -loglevel error -f concat -safe 0 -i $tmpBase -c:v copy -c:a copy -c:s mov_text -map 0 $tmpConcatFile
 
                 $finalTemp = $tmpConcatFile
             }
@@ -231,7 +270,7 @@ function ProcessVideos {
             # ============================================================
             # NO CHAPTERS PATH — single cut with start/end trim
             # ============================================================
-            $durationSecondsOrig = ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $videoFile
+            $durationSecondsOrig = RunFFmpeg -Tool ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $videoFile
             MessageLog "Original duration: $($durationSecondsOrig)s" "debug"
 
             $clipStart = $startSkipSeconds
@@ -250,7 +289,7 @@ function ProcessVideos {
             # cut using the unified clip command
             $tmpCutFile = "$($tmpBasePath)_cut.mp4"
             MessageLog "Cutting $($clipStart)-$($clipEnd) => $($tmpCutFile)" "debug"
-            ffmpeg -loglevel error -ss $clipStart -i $videoFile -t $clipEnd -c:v:0 copy -c:a copy -c:s copy -map 0:v:0 -map 0:a -map 0:s? -map_metadata -1 -avoid_negative_ts make_zero $tmpCutFile
+            RunFFmpeg -loglevel error -ss $clipStart -i $videoFile -t $clipEnd -c:v:0 copy -c:a copy -c:s copy -map 0:v:0 -map 0:a -map 0:s? -map_metadata -1 -avoid_negative_ts make_zero $tmpCutFile
 
             $finalTemp = $tmpCutFile
         }
@@ -264,22 +303,22 @@ function ProcessVideos {
 
             if ($hardwareAccelType -eq "nvidia") {
                 $nvencCodec = if ($useHevc) { "hevc_nvenc" } else { "h264_nvenc" }
-                ffmpeg -hwaccel cuda -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $nvencCodec -preset p7 -rc vbr -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                RunFFmpeg -hwaccel cuda -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $nvencCodec -preset p7 -rc vbr -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
             }
             elseif ($hardwareAccelType -eq "amd") {
                 $amfCodec = if ($useHevc) { "hevc_amf" } else { "h264_amf" }
-                ffmpeg -hwaccel d3d11va -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $amfCodec -quality quality -rc vbr_peak -qp_i 18 -qp_p 20 -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                RunFFmpeg -hwaccel d3d11va -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $amfCodec -quality quality -rc vbr_peak -qp_i 18 -qp_p 20 -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
             }
             elseif ($hardwareAccelType -eq "intel") {
                 $qsvCodec = if ($useHevc) { "hevc_qsv" } else { "h264_qsv" }
-                ffmpeg -hwaccel qsv -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $qsvCodec -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                RunFFmpeg -hwaccel qsv -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v $qsvCodec -b:v $videoRate -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
             }
             else {
                 if ($useHevc) {
-                    ffmpeg -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v libx265 -preset medium -crf 26 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                    RunFFmpeg -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v libx265 -preset medium -crf 26 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
                 }
                 else {
-                    ffmpeg -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v libx264 -preset slower -crf 20 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
+                    RunFFmpeg -loglevel error -i $finalTemp -map 0:v:0? -map 0:a:0? -map 0:s? -c:v libx264 -preset slower -crf 20 -c:a aac -b:a $audioRate -c:s mov_text $tmpCompressFile
                 }
             }
 
