@@ -79,7 +79,7 @@ function MessageLog($message, $msgType) {
     $timeStamp = "[{0:MM/dd/yy} {0:HH:mm:ss}]" -f (Get-Date)
     $logstring = "$($timeStamp) - $($message)"
 
-    if ($logFileLocation -eq "Console" -or $msgType -eq "console") { Write-Host $logstring }
+    if ($logFileLocation -eq "Console" -or $msgType -eq "console") { Write-Host "`r$logstring" -NoNewline }
     else { Add-content $logFileLocation -value $logstring }
 }
 
