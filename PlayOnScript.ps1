@@ -7,8 +7,28 @@
 
 # Accept optional config file parameter
 param(
-    [string]$ConfigFile = ""
+    [string]$ConfigFile = "",
+    [switch]$Help
 )
+
+# Show command line help and exit
+if ($Help) {
+    Write-Host ""
+    Write-Host "PlayOnSnip - Remove PlayOn tags and/or commercials"
+    Write-Host ""
+    Write-Host "Usage:"
+    Write-Host "  powershell -ExecutionPolicy Bypass -File PlayOnScript.ps1 [parameters]"
+    Write-Host ""
+    Write-Host "Command Line Parameters:"
+    Write-Host "  -ConfigFile <path>   Path to the configuration JSON file."
+    Write-Host "                       If omitted, PlayOnConfig.json in the script directory is used."
+    Write-Host "  -h, -Help            Show this help and exit."
+    Write-Host ""
+    Write-Host "Example:"
+    Write-Host "  powershell -ExecutionPolicy Bypass -File PlayOnScript.ps1 -ConfigFile `"PlayOnConfigLocal.json`""
+    Write-Host ""
+    exit 0
+}
 
 # Function to load configuration from JSON file
 function LoadConfiguration([string]$configPath) {
@@ -32,8 +52,94 @@ function LoadConfiguration([string]$configPath) {
     }
 }
 
+# Function to validate configuration values and return a list of warnings
+function ValidateConfiguration($config) {
+    $warnings = @()
+
+    $integerFields = @(
+        @{ Name = "startSkipSeconds"; Min = 0 },
+        @{ Name = "endSkipSeconds"; Min = 0 },
+        @{ Name = "retryTime"; Min = 0 },
+        @{ Name = "movieLength"; Min = 0 }
+    )
+    foreach ($field in $integerFields) {
+        $name = $field.Name
+        if ($null -eq $config.$name) {
+            $warnings += "Config field '$name' is missing."
+        }
+        elseif ($config.$name -isnot [int] -and $config.$name -isnot [long]) {
+            $warnings += "Config field '$name' must be an integer, found: '$($config.$name)'."
+        }
+        elseif ($config.$name -lt $field.Min) {
+            $warnings += "Config field '$name' must be >= $($field.Min), found: '$($config.$name)'."
+        }
+    }
+
+    $boolFields = @("autoExit", "compress", "useHevc", "deleteSource", "debug", "deleteTempFiles", "runLowerPriority")
+    foreach ($name in $boolFields) {
+        if ($null -eq $config.$name) {
+            $warnings += "Config field '$name' is missing."
+        }
+        elseif ($config.$name -isnot [bool]) {
+            $warnings += "Config field '$name' must be true or false, found: '$($config.$name)'."
+        }
+    }
+
+    $stringFields = @("inputFolder", "outputMovies", "outputTelevision", "logFileLocation")
+    foreach ($name in $stringFields) {
+        if ([string]::IsNullOrEmpty($config.$name)) {
+            $warnings += "Config field '$name' is missing or empty."
+        }
+    }
+
+    if ([string]::IsNullOrEmpty($config.hardwareAccelType)) {
+        $warnings += "Config field 'hardwareAccelType' is missing or empty."
+    }
+    elseif (@("nvidia", "amd", "intel", "none") -notcontains $config.hardwareAccelType.ToLower()) {
+        $warnings += "Config field 'hardwareAccelType' must be one of: nvidia, amd, intel, none. Found: '$($config.hardwareAccelType)'."
+    }
+
+    if ($config.compress -eq $true) {
+        if ([string]::IsNullOrEmpty($config.videoRate)) {
+            $warnings += "Config field 'videoRate' is required when compress is true."
+        }
+        elseif ($config.videoRate -notmatch '^\d+[kKmM]$') {
+            $warnings += "Config field 'videoRate' must be a valid bitrate like '1M' or '128k', found: '$($config.videoRate)'."
+        }
+        if ([string]::IsNullOrEmpty($config.audioRate)) {
+            $warnings += "Config field 'audioRate' is required when compress is true."
+        }
+        elseif ($config.audioRate -notmatch '^\d+[kKmM]$') {
+            $warnings += "Config field 'audioRate' must be a valid bitrate like '128k' or '1M', found: '$($config.audioRate)'."
+        }
+    }
+
+    if (-not [string]::IsNullOrEmpty($config.inputFolder) -and -not (Test-Path $config.inputFolder)) {
+        $warnings += "Config field 'inputFolder' directory does not exist: '$($config.inputFolder)'."
+    }
+    if (-not [string]::IsNullOrEmpty($config.outputMovies) -and -not (Test-Path $config.outputMovies)) {
+        $warnings += "Config field 'outputMovies' directory does not exist: '$($config.outputMovies)'."
+    }
+    if (-not [string]::IsNullOrEmpty($config.outputTelevision) -and -not (Test-Path $config.outputTelevision)) {
+        $warnings += "Config field 'outputTelevision' directory does not exist: '$($config.outputTelevision)'."
+    }
+
+    return $warnings
+}
+
+# Function to print configuration warnings to the console
+function ShowConfigurationWarnings($config) {
+    $warnings = ValidateConfiguration $config
+    foreach ($warning in $warnings) {
+        Write-Host "WARNING: $warning" -ForegroundColor Yellow
+    }
+}
+
 # Load configuration
 $config = LoadConfiguration $ConfigFile
+
+# Warn about any invalid configuration values
+ShowConfigurationWarnings $config
 
 # Apply configuration values to script variables
 $startSkipSeconds = $config.startSkipSeconds
@@ -386,6 +492,7 @@ do {
                 # R pressed - reload configuration
                 MessageLog "Reloading configuration from file..." "console"
                 $config = LoadConfiguration $ConfigFile
+                ShowConfigurationWarnings $config
                 $startSkipSeconds = $config.startSkipSeconds
                 $endSkipSeconds = $config.endSkipSeconds
                 $retryTime = $config.retryTime
