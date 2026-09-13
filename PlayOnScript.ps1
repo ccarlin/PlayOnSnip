@@ -60,7 +60,8 @@ function ValidateConfiguration($config) {
         @{ Name = "startSkipSeconds"; Min = 0 },
         @{ Name = "endSkipSeconds"; Min = 0 },
         @{ Name = "retryTime"; Min = 0 },
-        @{ Name = "movieLength"; Min = 0 }
+        @{ Name = "movieLength"; Min = 0 },
+        @{ Name = "adSkipMaxSeconds"; Min = 1 }
     )
     foreach ($field in $integerFields) {
         $name = $field.Name
@@ -160,6 +161,7 @@ $debug = $config.debug
 $deleteTempFiles = $config.deleteTempFiles
 $runLowerPriority = $config.runLowerPriority
 $useHevc = $config.useHevc
+$adSkipMaxSeconds = $config.adSkipMaxSeconds
 
 
 ###################################################################################################################
@@ -322,7 +324,7 @@ function ProcessVideos {
 
                 # skip Advertisement chapters under 10 min
                 $chapterTitle = $chapter.tags.title
-                if ($chapterTitle -eq "Advertisement" -AND $chapterDuration -le 600 -AND $chapterDuration -ge 1) {
+                if ($chapterTitle -eq "Advertisement" -AND $chapterDuration -le $adSkipMaxSeconds -AND $chapterDuration -ge 1) {
                     $chapterCount++
                     continue
                 }
@@ -510,6 +512,7 @@ do {
                 $deleteTempFiles = $config.deleteTempFiles
                 $runLowerPriority = $config.runLowerPriority
                 $useHevc = $config.useHevc
+                $adSkipMaxSeconds = $config.adSkipMaxSeconds
                 MessageLog "Configuration reloaded successfully." "console"
                 # Restart the loop with updated config
                 $keyPressed = $true

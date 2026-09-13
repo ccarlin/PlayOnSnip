@@ -7,6 +7,7 @@
   "outputMovies": "[PATH_TO_MOVIES_OUTPUT]",
   "outputTelevision": "[PATH_TO_TV_SHOWS_OUTPUT]",
   "movieLength": 4000,
+  "adSkipMaxSeconds": 480,
   "compress": true,
   "videoRate": "[Video BitRate for Compression]",
   "audioRate": "[Audio BitRate for Compression]",

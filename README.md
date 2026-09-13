@@ -45,6 +45,7 @@ powershell -ExecutionPolicy Bypass -File "PlayOnScript.ps1" -ConfigFile "C:\path
 | `outputMovies` | string | Output directory for detected movies |
 | `outputTelevision` | string | Output directory for detected TV shows |
 | `movieLength` | integer | Minimum duration in seconds to classify a video as a movie (0 = send everything to movies folder) |
+| `adSkipMaxSeconds` | integer | Max duration in seconds for an Advertisement chapter to be cut. Chapters longer than this are kept (default `480` = 8 minutes) |
 | `compress` | boolean | Enable video compression via ffmpeg |
 | `videoRate` | string | Video bitrate for compression (e.g. `"1M"`, `"2M"`) |
 | `audioRate` | string | Audio bitrate for compression (e.g. `"128k"`, `"156k"`) |
@@ -67,6 +68,7 @@ powershell -ExecutionPolicy Bypass -File "PlayOnScript.ps1" -ConfigFile "C:\path
   "outputMovies": "D:\\Media\\Movies\\",
   "outputTelevision": "D:\\Media\\TV Shows\\",
   "movieLength": 4000,
+  "adSkipMaxSeconds": 480,
   "compress": true,
   "videoRate": "1M",
   "audioRate": "156k",
@@ -107,7 +109,7 @@ While the script is running:
 3. Determines if the video is a movie or TV show (by filename regex `s\d\de\d\d` or duration vs. `movieLength`)
 4. Reads ffprobe chapter metadata
 5. Splits video into chapter clips, trimming `startSkipSeconds` from the first chapter and `endSkipSeconds` from the last chapter
-6. Skips chapters titled "Advertisement" (unless they're longer than 10 minutes, indicating a mislabel)
+6. Skips chapters titled "Advertisement" (unless they're longer than `adSkipMaxSeconds`, indicating a mislabel)
 7. Concatenates remaining chapters into a single video
 8. Optionally compresses with hardware-accelerated encoding
 9. Moves the final video to the appropriate output folder
