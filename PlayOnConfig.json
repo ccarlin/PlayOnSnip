@@ -15,6 +15,7 @@
   "useHevc": true,
   "deleteSource": true,
   "logFileLocation": "[PATH_TO_LOG_FILE]",
+  "errorFolder": "[PATH_TO_ERROR_VIDEOS]",
   "debug": true,
   "deleteTempFiles": true,
   "runLowerPriority": true

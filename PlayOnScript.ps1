@@ -86,7 +86,7 @@ function ValidateConfiguration($config) {
         }
     }
 
-    $stringFields = @("inputFolder", "outputMovies", "outputTelevision", "logFileLocation")
+    $stringFields = @("inputFolder", "outputMovies", "outputTelevision", "logFileLocation", "errorFolder")
     foreach ($name in $stringFields) {
         if ([string]::IsNullOrEmpty($config.$name)) {
             $warnings += "Config field '$name' is missing or empty."
@@ -124,6 +124,9 @@ function ValidateConfiguration($config) {
     if (-not [string]::IsNullOrEmpty($config.outputTelevision) -and -not (Test-Path $config.outputTelevision)) {
         $warnings += "Config field 'outputTelevision' directory does not exist: '$($config.outputTelevision)'."
     }
+    if (-not [string]::IsNullOrEmpty($config.errorFolder) -and -not (Test-Path $config.errorFolder)) {
+        $warnings += "Config field 'errorFolder' directory does not exist: '$($config.errorFolder)'."
+    }
 
     return $warnings
 }
@@ -150,6 +153,7 @@ $autoExit = $config.autoExit
 $inputFolder = $config.inputFolder
 $outputMovies = $config.outputMovies
 $outputTelevision = $config.outputTelevision
+$errorFolder = $config.errorFolder
 $movieLength = $config.movieLength
 $compress = $config.compress
 $videoRate = $config.videoRate
@@ -235,6 +239,59 @@ function RunFFmpeg {
     return $stdoutContent
 }
 
+function RunFFprobeDuration($filePath) {
+    $stderrFile = [System.IO.Path]::GetTempFileName()
+    $stdoutFile = [System.IO.Path]::GetTempFileName()
+    $argString = "-v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 `"$filePath`""
+    $proc = Start-Process -FilePath "ffprobe" -ArgumentList $argString -NoNewWindow -Wait -PassThru -RedirectStandardError $stderrFile -RedirectStandardOutput $stdoutFile
+    $stderrOutput = Get-Content $stderrFile -ErrorAction SilentlyContinue
+    $stdoutContent = Get-Content $stdoutFile -Raw -ErrorAction SilentlyContinue
+    Remove-Item $stderrFile -ErrorAction SilentlyContinue
+    Remove-Item $stdoutFile -ErrorAction SilentlyContinue
+    if ($proc.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($stdoutContent)) {
+        return [PSCustomObject]@{
+            Success  = $false
+            Duration = $null
+            Error    = ($stderrOutput -join '; ')
+        }
+    }
+    try {
+        $duration = [double]$stdoutContent.Trim()
+        return [PSCustomObject]@{
+            Success  = $true
+            Duration = $duration
+            Error    = ""
+        }
+    }
+    catch {
+        return [PSCustomObject]@{
+            Success  = $false
+            Duration = $null
+            Error    = "Failed to parse duration: $($stdoutContent)"
+        }
+    }
+}
+
+function MoveToErrorFolder($filePath) {
+    if ([string]::IsNullOrEmpty($errorFolder)) {
+        MessageLog "ERROR: Cannot move to error folder as errorFolder is not configured" "console"
+        return $false
+    }
+    if (!(Test-Path -Path $errorFolder)) {
+        New-Item -ItemType directory -Path $errorFolder | Out-Null
+    }
+    try {
+        $destination = Join-Path -Path $errorFolder -ChildPath (Split-Path -Leaf $filePath)
+        Move-Item -Path $filePath -Destination $destination -Force
+        MessageLog "Moved file to error folder: $($destination)"
+        return $true
+    }
+    catch {
+        MessageLog "ERROR: Failed to move file to error folder: $_"
+        return $false
+    }
+}
+
 #check if the video is a movie soley by total length of the video
 function isMovie($filePath) {
     #If there is no movie length then everything goes to the one directory
@@ -244,7 +301,20 @@ function isMovie($filePath) {
     if ($filePath -match 's\d\de\d\d') { return $false }
 
     #If we don't have the season episode format check by length
-    $videoLength = RunFFmpeg -Tool ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $filePath
+    $probeResult = RunFFprobeDuration $filePath
+    if (-not $probeResult.Success) {
+        # Do not move to error if file appears to be in progress (locked)
+        $fileLocked = IsFileLocked $filePath
+        if ($fileLocked -eq $false) {
+            MessageLog "ffprobe failed for $($filePath) and file is not locked. Moving to error folder."
+            MoveToErrorFolder $filePath | Out-Null
+        }
+        else {
+            MessageLog "ffprobe failed for $($filePath) but file appears to be in progress (locked). Skipping for now." "debug"
+        }
+        return $false
+    }
+    $videoLength = $probeResult.Duration
     if ($videoLength -gt $movieLength) { return $true }
     else { return $false }
 }
@@ -305,7 +375,37 @@ function ProcessVideos {
         $tmpBasePath = $tmpBase.Substring(0, $tmpBase.LastIndexOf('.'))
 
         # get chapters metadata
-        $chaptersInVideo = (RunFFmpeg -Tool ffprobe -loglevel error $videoFile -show_chapters -print_format json) | ConvertFrom-Json
+        $chaptersProbe = RunFFmpeg -Tool ffprobe -loglevel error $videoFile -show_chapters -print_format json
+        if ([string]::IsNullOrWhiteSpace($chaptersProbe)) {
+            $fileLocked = IsFileLocked $videoFile
+            if ($fileLocked -eq $false) {
+                MessageLog "ffprobe failed to retrieve chapters for $($videoFile) and file is not locked. Moving to error folder."
+                MoveToErrorFolder $videoFile | Out-Null
+            }
+            else {
+                MessageLog "ffprobe failed to retrieve chapters for $($videoFile) but file appears to be in progress (locked). Skipping for now." "debug"
+            }
+            if ($deleteTempFiles) {
+                Remove-Item "$($tmpBasePath)*.*" -ErrorAction SilentlyContinue
+                Remove-Item $tmpBase -ErrorAction SilentlyContinue
+            }
+            continue
+        }
+        try {
+            $chaptersInVideo = $chaptersProbe | ConvertFrom-Json
+        }
+        catch {
+            MessageLog "Error parsing chapter metadata for $($videoFile): $_"
+            $fileLocked = IsFileLocked $videoFile
+            if ($fileLocked -eq $false) {
+                MoveToErrorFolder $videoFile | Out-Null
+            }
+            if ($deleteTempFiles) {
+                Remove-Item "$($tmpBasePath)*.*" -ErrorAction SilentlyContinue
+                Remove-Item $tmpBase -ErrorAction SilentlyContinue
+            }
+            continue
+        }
         $tblChaptersInVideo = $chaptersInVideo.chapters
         $numChaptersInVideo = $tblChaptersInVideo.Length
 
@@ -378,8 +478,24 @@ function ProcessVideos {
             # ============================================================
             # NO CHAPTERS PATH — single cut with start/end trim
             # ============================================================
-            $durationSecondsOrig = RunFFmpeg -Tool ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $videoFile
-            MessageLog "Original duration: $($durationSecondsOrig)s" "debug"
+        $probeResultOrig = RunFFprobeDuration $videoFile
+        if (-not $probeResultOrig.Success) {
+            $fileLocked = IsFileLocked $videoFile
+            if ($fileLocked -eq $false) {
+                MessageLog "ffprobe failed for $($videoFile) and file is not locked. Moving to error folder."
+                MoveToErrorFolder $videoFile | Out-Null
+            }
+            else {
+                MessageLog "ffprobe failed for $($videoFile) but file appears to be in progress (locked). Skipping for now." "debug"
+            }
+            if ($deleteTempFiles) {
+                Remove-Item "$($tmpBasePath)*.*" -ErrorAction SilentlyContinue
+                Remove-Item $tmpBase -ErrorAction SilentlyContinue
+            }
+            continue
+        }
+        $durationSecondsOrig = $probeResultOrig.Duration
+        MessageLog "Original duration: $($durationSecondsOrig)s" "debug"
 
             $clipStart = $startSkipSeconds
             $clipEnd   = $durationSecondsOrig - $endSkipSeconds
@@ -502,6 +618,7 @@ do {
                 $inputFolder = $config.inputFolder
                 $outputMovies = $config.outputMovies
                 $outputTelevision = $config.outputTelevision
+                $errorFolder = $config.errorFolder
                 $movieLength = $config.movieLength
                 $compress = $config.compress
                 $videoRate = $config.videoRate
